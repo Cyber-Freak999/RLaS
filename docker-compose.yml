@@ -1,0 +1,136 @@
+name: rlas
+
+# Core services only. The k6 test overlay lives in docker-compose.test.yml so
+# starting the system and testing it stay two separate steps (see README §3).
+
+services:
+  redis-master:
+    image: redis:7-alpine
+    command: ["sh", "/usr/local/etc/redis/entrypoint.sh", "master", "/usr/local/etc/redis/redis-master.conf", "redis-server"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - ./redis/entrypoint.sh:/usr/local/etc/redis/entrypoint.sh:ro
+      - ./redis/redis-master.conf:/usr/local/etc/redis/redis-master.conf:ro
+      - redis-master-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping; else redis-cli ping; fi | grep -q PONG"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      backend:
+        ipv4_address: 172.28.0.10
+
+  redis-replica:
+    image: redis:7-alpine
+    command: ["sh", "/usr/local/etc/redis/entrypoint.sh", "replica", "/usr/local/etc/redis/redis-replica.conf", "redis-server"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - ./redis/entrypoint.sh:/usr/local/etc/redis/entrypoint.sh:ro
+      - ./redis/redis-replica.conf:/usr/local/etc/redis/redis-replica.conf:ro
+      - redis-replica-data:/data
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping; else redis-cli ping; fi | grep -q PONG"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      backend:
+        ipv4_address: 172.28.0.11
+
+  redis-sentinel-1:
+    image: redis:7-alpine
+    command: ["sh", "/usr/local/etc/redis/entrypoint.sh", "sentinel", "/usr/local/etc/redis/sentinel.conf", "redis-sentinel"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - ./redis/entrypoint.sh:/usr/local/etc/redis/entrypoint.sh:ro
+      - ./redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf:ro
+      - redis-sentinel-1-data:/data
+    ports:
+      - "127.0.0.1:26379:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -p 26379 -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping; else redis-cli -p 26379 ping; fi | grep -q PONG"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      backend:
+        ipv4_address: 172.28.0.20
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    command: ["sh", "/usr/local/etc/redis/entrypoint.sh", "sentinel", "/usr/local/etc/redis/sentinel.conf", "redis-sentinel"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - ./redis/entrypoint.sh:/usr/local/etc/redis/entrypoint.sh:ro
+      - ./redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf:ro
+      - redis-sentinel-2-data:/data
+    ports:
+      - "127.0.0.1:26380:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -p 26379 -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping; else redis-cli -p 26379 ping; fi | grep -q PONG"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      backend:
+        ipv4_address: 172.28.0.21
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    command: ["sh", "/usr/local/etc/redis/entrypoint.sh", "sentinel", "/usr/local/etc/redis/sentinel.conf", "redis-sentinel"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - ./redis/entrypoint.sh:/usr/local/etc/redis/entrypoint.sh:ro
+      - ./redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf:ro
+      - redis-sentinel-3-data:/data
+    ports:
+      - "127.0.0.1:26381:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -p 26379 -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping; else redis-cli -p 26379 ping; fi | grep -q PONG"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      backend:
+        ipv4_address: 172.28.0.22
+
+networks:
+  backend:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  redis-master-data:
+  redis-replica-data:
+  redis-sentinel-1-data:
+  redis-sentinel-2-data:
+  redis-sentinel-3-data:
