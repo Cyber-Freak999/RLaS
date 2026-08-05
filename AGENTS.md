@@ -178,10 +178,25 @@ Degraded responses (either code) additionally carry `X-RateLimit-Degraded: true`
   sub-agents (per `dispatching-parallel-agents` / `subagent-driven-development`)
   with a precise spec and the verification commands they must run. A sub-agent
   only touches its assigned subsystem; integration checkpoints happen on
-  `main`.
+  `main`. *Why sub-agents:* (1) parallel wall-clock speedup — the
+  rate-limiter, control-plane, k6, and dashboard work streams share no code,
+  so sequencing them serially wastes time; (2) a fresh context per subsystem
+  forces a precise written spec (scope + verification commands), which is what
+  makes a sub-agent's output auditable without replaying the whole
+  conversation; (3) the hard boundary "touch only your subsystem" contains any
+  mistake to a reviewable unit instead of entangling unrelated files; (4) the
+  shared contract (API shape, Redis key schema, stream names) stays coherent
+  because integration happens on `main`, not inside a branch's private world.
 - **CI policy:** a small PR workflow (`.github/workflows/ci.yml`: `go vet` +
   `go test -race ./...` for both modules) runs on PRs and `main` push. The
   heavy compose + k6 suite stays a local/release gate, not CI.
+- **`main` is a protected branch** (GitHub branch protection rule — requires a
+  PR to merge, linear history, conversation resolution; blocks force pushes and
+  deletions, and not even the owner can bypass). Do not push to `main`
+  directly, and do not reconfigure or remove the protection rule. A required CI
+  status check (`build-and-test`) is wired into the rule once `ci.yml` exists
+  at M2 — GitHub requires a check to exist before it can be required, so this
+  is deliberately a two-step change, not an oversight.
 - **CD:** none. `main` is the deliverable.
 
 ## Pre-build checklist (small decisions, easy to forget)
