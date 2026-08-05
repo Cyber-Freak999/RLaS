@@ -22,11 +22,13 @@
 -- ARGV[3]  period_seconds  length of one rate period
 -- ARGV[4]  cost            tokens consumed by this request (>= 1)
 --
--- Returns {allowed, remaining, reset_at_ms}:
+-- Returns {allowed, remaining, reset_at_ms, now_ms}:
 --   allowed    1/0
 --   remaining  floor of tokens in the bucket now, never negative
 --   reset_at   on allow: when the bucket is full again (= the new TAT)
 --              on deny:  when `cost` tokens are available again (Retry-After)
+--   now        the script's own clock (Redis TIME), so callers can compute a
+--              Retry-After window on the same clock the bucket was evaluated
 
 local burst  = tonumber(ARGV[1])
 local rate   = tonumber(ARGV[2])
@@ -36,7 +38,7 @@ local cost   = tonumber(ARGV[4])
 -- Defensive only: the admin boundary (constraint 13) rejects these before they
 -- reach Redis. Guarding here keeps the script total no matter the caller.
 if burst < 1 or rate <= 0 or period <= 0 or cost < 1 then
-  return { 0, 0, 0 }
+  return { 0, 0, 0, 0 }
 end
 
 -- Fractional interval keeps precision for rates that don't divide the period
@@ -67,7 +69,7 @@ if available < cost then
   if reset_at < now then
     reset_at = now
   end
-  return { 0, math.floor(remaining), math.floor(reset_at) }
+  return { 0, math.floor(remaining), math.floor(reset_at), now }
 end
 
 -- Allow: push the TAT forward by the cost of this request, atomically.
@@ -79,4 +81,4 @@ if remaining < 0 then
   remaining = 0
 end
 
-return { 1, math.floor(remaining), math.floor(new_tat) }
+return { 1, math.floor(remaining), math.floor(new_tat), now }
