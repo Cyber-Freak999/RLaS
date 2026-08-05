@@ -2,7 +2,7 @@
 // Sentinel-backed Redis (the same connection path /check uses), not against a
 // mock or a scriptable interpreter — PRD §8 requires exercising the script
 // itself, not just the HTTP layer.
-package redis_test
+package redisclient_test
 
 import (
 	"context"
@@ -56,13 +56,14 @@ func newKey(t *testing.T) string {
 }
 
 type result struct {
-	allowed  int64
+	allowed   int64
 	remaining int64
-	resetAt  int64
+	resetAt   int64
+	now       int64
 }
 
 // check runs one EVAL round trip with the given parameters and decodes the
-// script's {allowed, remaining, reset_at_ms} reply.
+// script's {allowed, remaining, reset_at_ms, now_ms} reply.
 func check(t *testing.T, key string, burst, rate, periodSec, cost int64) result {
 	t.Helper()
 	raw, err := client.Eval(ctx, script, []string{key}, burst, rate, periodSec, cost).Result()
@@ -70,18 +71,34 @@ func check(t *testing.T, key string, burst, rate, periodSec, cost int64) result 
 		t.Fatalf("eval: %v", err)
 	}
 	items, ok := raw.([]interface{})
-	if !ok || len(items) != 3 {
+	if !ok || len(items) != 4 {
 		t.Fatalf("unexpected script reply: %#v", raw)
 	}
 	var r result
 	r.allowed = items[0].(int64)
 	r.remaining = items[1].(int64)
 	r.resetAt = items[2].(int64)
+	r.now = items[3].(int64)
 	return r
 }
 
 func nowMS() int64 {
 	return time.Now().UnixMilli()
+}
+
+// The reply must carry the script's own now so callers can compute Retry-After
+// from the same authoritative clock the bucket was evaluated on — a caller
+// clock that skews from Redis would otherwise emit wrong retry windows.
+func TestReplyCarriesRedisNow(t *testing.T) {
+	key := newKey(t)
+	r := check(t, key, 5, 5, 1, 1)
+	if r.now <= 0 {
+		t.Fatalf("reply must carry the script's now (ms), got %d", r.now)
+	}
+	skew := r.now - nowMS()
+	if skew < -2000 || skew > 2000 {
+		t.Fatalf("script now %d drifts from host clock %d by %dms", r.now, nowMS(), skew)
+	}
 }
 
 func TestFreshBucketAllowsFirst(t *testing.T) {

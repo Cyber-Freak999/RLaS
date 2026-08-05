@@ -1,7 +1,7 @@
 // Latency budget for a bare EVAL round trip. This is the day-one signal on
 // whether the one-round-trip-per-check design (constraint 1) can meet the
 // documented server-side p99 < 5ms budget before any service code exists.
-package redis_test
+package redisclient_test
 
 import (
 	"context"
