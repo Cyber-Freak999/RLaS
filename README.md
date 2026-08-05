@@ -179,6 +179,7 @@ docker compose run --rm rate-limiter go test -race ./...
 
 ```
 .
+├── .github/               # PR template; CI workflow (lands at M2)
 ├── rate-limiter/            # Go service: /check
 ├── control-plane/           # Go service: /admin + Streams consumer
 ├── redis/                   # Sentinel + Lua (GCRA) scripts

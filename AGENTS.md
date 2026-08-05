@@ -157,6 +157,33 @@ Degraded responses (either code) additionally carry `X-RateLimit-Degraded: true`
   no shared internal package that forces them to release together, beyond a
   small shared `types` or `redisclient` package if needed.
 
+## Feature shipping standard
+
+- **Workflow:** GitHub Flow. Short-lived branches off `main` named
+  `feat/<prd-ref>-<slug>` (e.g. `feat/F3-gcra-lua`), merged via PR using
+  rebase-merge to keep `main` linear. The PR is the review gate — every PR must
+  complete the checklist in `.github/pull_request_template.md`.
+- **Commits:** Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `ci:`,
+  `refactor:`, `chore:`). Keep commits atomic — one logical unit each that
+  builds and passes on its own, except an intentional red test commit.
+- **TDD is mandatory:** red-green-refactor for every feature and bugfix. Write
+  the failing test first (`test:` commit), then implement (`feat:`/`fix:`),
+  then refactor only if needed. Red commits stay local until the green one
+  exists. Required test layers:
+  1. Go unit tests — `go test -race ./...` per service.
+  2. Direct GCRA Lua-script EVAL tests (PRD §8) — not only through HTTP.
+  3. k6 acceptance scenarios (correctness / latency / chaos) for
+     integration-level changes.
+- **Sub-agents:** independent, parallelizable work streams are dispatched to
+  sub-agents (per `dispatching-parallel-agents` / `subagent-driven-development`)
+  with a precise spec and the verification commands they must run. A sub-agent
+  only touches its assigned subsystem; integration checkpoints happen on
+  `main`.
+- **CI policy:** a small PR workflow (`.github/workflows/ci.yml`: `go vet` +
+  `go test -race ./...` for both modules) runs on PRs and `main` push. The
+  heavy compose + k6 suite stays a local/release gate, not CI.
+- **CD:** none. `main` is the deliverable.
+
 ## Pre-build checklist (small decisions, easy to forget)
 
 - [ ] `period` is a fixed enum: `second`, `minute`, `hour` — not a free-form
