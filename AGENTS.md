@@ -28,7 +28,10 @@ change them; if one seems wrong, flag it rather than deviating.
 
 1. **Algorithm is GCRA, one atomic Lua script, one Redis round trip per check.**
    No fixed-window counters, no read-then-write-in-application-code patterns —
-   the check-and-consume must happen atomically inside Redis via `EVAL`.
+   the check-and-consume must happen atomically inside Redis via `EVAL`. The
+   script derives the current time from Redis itself (`TIME`, allowed under
+   effect replication, default since Redis 7.0), never from the caller's clock,
+   so all replicas share one authoritative time base.
 2. **`rate-limiter` never talks to TimescaleDB, and never talks to Redis for
    anything except: GCRA check, API-key lookup, limit-config read, Streams
    `XADD`.** Keeping this service's dependency surface minimal is what keeps
@@ -39,11 +42,17 @@ change them; if one seems wrong, flag it rather than deviating.
 4. **Fail-open, not fail-closed**, when Redis is unreachable. A local
    in-memory circuit-breaker fallback serves the response; the response must
    carry `X-RateLimit-Degraded: true`. Never let a Redis outage return `503`
-   for `/check`.
+   for `/check`. The fallback is a per-replica token bucket seeded from each
+   replica's cached last-known per-client limits (limits and the key→client
+   map are refreshed on every successful Redis round trip); it trips after 3
+   consecutive check-path Redis failures and recovers after 1 success.
 5. **Every approved request is pushed onto Redis Streams (`XADD`), never
    written synchronously to TimescaleDB from the hot path.** The
    Streams-consumer in `control-plane` is the only thing that touches
-   TimescaleDB for writes.
+   TimescaleDB for writes. Consumer-group delivery is at-least-once; the
+   consumer writes idempotently (`ON CONFLICT (event_id) DO NOTHING`, where
+   `event_id` is the stream entry ID) and `XACK`s after the write, so a crash
+   between the write and the `XACK` can't create duplicate billing rows.
 6. **A limit change (`PUT /admin/clients/{id}/limits`) must reset that
    client's GCRA state key.** Skipping this can produce mathematically
    undefined wait-time results — this is a correctness requirement, not a
@@ -53,11 +62,13 @@ change them; if one seems wrong, flag it rather than deviating.
 8. **Auth is two separate mechanisms**: per-client API key (Redis-backed) for
    `/check`; a separate admin bearer token for `/admin/*`. Never let one
    satisfy the other.
-9. **Redis primary runs with AOF persistence** (`appendonly yes`,
+9. **Redis runs with AOF persistence on every node** (`appendonly yes`,
    `appendfsync everysec`). `client_limits` and `api_keys` are the only copy
    of who's allowed to call the system — losing them on a restart
    deprovisions every client. GCRA state itself is fine to lose (it just
-   resets to a fresh bucket).
+   resets to a fresh bucket). The promoted replica must run the same AOF
+   settings as the original primary, or the durability guarantee silently
+   evaporates on the first failover.
 10. **The Streams key is trimmed** (`XADD ... MAXLEN ~ 100000`) and the
     consumer logs a warning if stream length exceeds ~50,000 on poll — this is
     the signal that the consumer is falling behind, before events actually
@@ -74,9 +85,11 @@ change them; if one seems wrong, flag it rather than deviating.
     in the chaos test that looks like a fail-safe bug but isn't one — don't
     let that ambiguity into the test results.
 13. **Admin API validates input before it reaches Redis or the Lua script**:
-    reject `rate <= 0`, `burst < 0`, non-positive `cost`, and any `period`
+    reject `rate <= 0`, `burst < 1`, non-positive `cost`, and any `period`
     outside `second | minute | hour` with a `400`. GCRA's math assumes
-    positive parameters; validate at the boundary, not inside the script.
+    positive parameters; validate at the boundary, not inside the script. A
+    `burst` of zero makes the bucket capacity zero and would deny every
+    request — it's rejected, not special-cased.
 14. **All routes are versioned under `/v1`** (`/v1/check`, `/v1/admin/*`) from
     the start. No version-negotiation logic is required for this deliverable
     — just the path prefix, so a future breaking change doesn't require
@@ -113,7 +126,7 @@ Degraded responses (either code) additionally carry `X-RateLimit-Degraded: true`
 |---|---|---|---|
 | `gcra:{client_id}` | GCRA theoretical-arrival-time state | rate-limiter (on check), control-plane (reset on limit change) | rate-limiter |
 | `client_limits:{client_id}` | `{rate, period, burst}` | control-plane | rate-limiter |
-| `api_keys:{key}` → `client_id` | key → client mapping | control-plane | rate-limiter |
+| `api_keys` (hash: `sha256(key)` → `client_id`) | key → client mapping (keys never stored in plaintext) | control-plane | rate-limiter |
 | `stream:approved_requests` | Redis Stream of approved-request events | rate-limiter (`XADD`) | control-plane consumer (`XREADGROUP`) |
 
 ## Testing requirements before calling anything "done"
@@ -148,6 +161,11 @@ Degraded responses (either code) additionally carry `X-RateLimit-Degraded: true`
 
 - [ ] `period` is a fixed enum: `second`, `minute`, `hour` — not a free-form
       duration string.
+- [ ] `burst` is validated `>= 1` — a zero burst capacity would deny every
+      request.
+- [ ] API keys are stored hashed (SHA-256), never plaintext in Redis.
+- [ ] Latency thresholds are two-tier: server-side p99 < 5ms (Go histogram)
+      and k6 end-to-end p95 < 10ms / p99 < 20ms through nginx.
 - [ ] `.env.example` exists and is kept current as new env vars are added
       (see below for the starting list).
 - [ ] Redis container config includes `appendonly yes`, `appendfsync everysec`.

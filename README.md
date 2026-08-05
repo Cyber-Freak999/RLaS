@@ -75,13 +75,17 @@ curl -X POST http://localhost:8080/v1/check \
 
 Response on success (`200`):
 ```json
-{ "allowed": true, "remaining": 99, "reset_at": "2026-07-18T00:01:00Z" }
+{ "allowed": true, "remaining": 19, "reset_at": "2026-07-18T00:01:00Z" }
 ```
 
 Response on rejection (`429`, with a `Retry-After` header):
 ```json
 { "allowed": false, "remaining": 0, "reset_at": "2026-07-18T00:01:00Z" }
 ```
+
+`remaining` is the client's current bucket level (burst capacity), so callers
+can self-throttle against burst headroom rather than the sustained rate;
+`reset_at` is when the bucket is expected to hold a full `cost` again.
 
 An `X-RateLimit-Degraded: true` header is present whenever a response was served
 from a replica's local circuit-breaker fallback rather than authoritative Redis
@@ -111,8 +115,12 @@ container orchestration stays in bash.
    nginx; asserts each client receives exactly their configured number of successes,
    no more, no fewer.
 2. **`latency.js`** — sustained load (10,000 req/sec aggregate across all 3
-   replicas) with a threshold assertion that p95/p99 check-latency stays under the
-   target (5ms server-side). The test fails the build if the threshold is breached.
+   replicas) with threshold assertions on end-to-end latency through nginx:
+   p95 < 10ms and p99 < 20ms. The test fails the build if a threshold is
+   breached. True server-side latency (p99 < 5ms) is tracked separately via each
+   service's Prometheus histogram on the ops dashboard — k6 can't observe that
+   number through the load balancer, so the two thresholds are defined and
+   measured independently.
 3. **`chaos_redis_outage.js`** — starts load, then automatically stops the
    `redis-master` container mid-run, asserts requests continue succeeding via the
    local fallback (fail-open, `X-RateLimit-Degraded: true`) rather than erroring,
@@ -152,7 +160,18 @@ docker compose run --rm rate-limiter go test -race ./...
   the request.
 - **Analytics without hot-path cost:** approved requests are pushed onto Redis
   Streams (non-blocking) and drained asynchronously by control-plane into
-  TimescaleDB — logging never adds latency to `/check`.
+  TimescaleDB — logging never adds latency to `/check`. Consumer-group delivery
+  is at-least-once and TimescaleDB writes are idempotent
+  (`ON CONFLICT (event_id) DO NOTHING`, keyed on the stream entry ID), so a
+  crash between the write and the `XACK` can't create duplicate billing rows.
+- **Degraded-mode drift:** the fail-open fallback is a per-replica bucket
+  seeded from each replica's cached last-known per-client limits, so during an
+  outage the fleet may admit up to ~3× a client's configured burst until Redis
+  recovers. Bounded and accepted; every degraded response carries
+  `X-RateLimit-Degraded: true`.
+- **Failover window:** GCRA state is deliberately allowed to be lost on a
+  Sentinel failover (it simply resets to a fresh bucket), so the cluster may
+  briefly over-admit while a new primary is promoted and catches up.
 
 ---
 
