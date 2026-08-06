@@ -1,0 +1,6 @@
+# Build context is the repo root (both Go modules are copied). Keep the sent
+# context small and never ship secrets or local env.
+.git
+.env
+*.docx
+architecture-diagram.png

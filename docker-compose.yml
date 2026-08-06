@@ -122,6 +122,36 @@ services:
       backend:
         ipv4_address: 172.28.0.22
 
+  rate-limiter:
+    build:
+      context: .
+      dockerfile: rate-limiter/Dockerfile
+    environment:
+      REDIS_SENTINEL_ADDRS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_MASTER_NAME: mymaster
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
+    healthcheck:
+      # Hits the real dependency-aware /healthz (constraint 11): Redis down =>
+      # 503 => compose marks the container unhealthy, not a fake liveness check.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - backend
+
 networks:
   backend:
     ipam:
