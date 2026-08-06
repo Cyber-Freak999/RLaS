@@ -24,9 +24,12 @@ jobs:
     env:
       REDIS_ADDR: 127.0.0.1:6379
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to full commit SHAs (not floating tags) so the actions can't be
+      # silently mutated by a tag move; the build-and-test check must be
+      # reproducible on the protected main branch.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: redis/go.mod
           cache: true
