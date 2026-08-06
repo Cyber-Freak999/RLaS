@@ -19,17 +19,22 @@ import (
 	"rlas/redis"
 )
 
-// testRedis connects to the Sentinel-backed Redis the compose stack provides
-// (the same connection path /check uses). Tests skip when it is unreachable —
-// CI runs the pure unit tests, while the Redis-gated suite runs locally and in
-// the compose/k6 release gate.
+// testRedis connects to the Redis the compose stack provides (the same
+// connection path /check uses). REDIS_ADDR switches to a plain single-node
+// client so CI runs these against a redis service container; locally the
+// Sentinel-backed path is exercised. Tests skip when Redis is unreachable.
 func testRedis(t *testing.T) *redis.Client {
 	t.Helper()
-	c := redisclient.NewFailoverClient(redisclient.FailoverConfig{
-		MasterName:    envOr("REDIS_MASTER_NAME", "mymaster"),
-		SentinelAddrs: splitCSV(envOr("REDIS_SENTINEL_ADDRS", "127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381")),
-		Password:      os.Getenv("REDIS_PASSWORD"),
-	})
+	var c *redis.Client
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		c = redis.NewClient(&redis.Options{Addr: addr})
+	} else {
+		c = redisclient.NewFailoverClient(redisclient.FailoverConfig{
+			MasterName:    envOr("REDIS_MASTER_NAME", "mymaster"),
+			SentinelAddrs: splitCSV(envOr("REDIS_SENTINEL_ADDRS", "127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381")),
+			Password:      os.Getenv("REDIS_PASSWORD"),
+		})
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := c.Ping(ctx).Err(); err != nil {

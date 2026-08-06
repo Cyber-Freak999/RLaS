@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultMasterName  = "mymaster"
+	defaultMasterName    = "mymaster"
 	defaultSentinelAddrs = "127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381"
 )
 
@@ -34,11 +34,18 @@ func TestMain(m *testing.M) {
 	}
 	script = string(raw)
 
-	client = redis.NewFailoverClient(&redis.FailoverOptions{
-		MasterName:    envOr("REDIS_MASTER_NAME", defaultMasterName),
-		SentinelAddrs: strings.Split(envOr("REDIS_SENTINEL_ADDRS", defaultSentinelAddrs), ","),
-		Password:      os.Getenv("REDIS_PASSWORD"),
-	})
+	// REDIS_ADDR switches to a plain single-node client so CI can run these
+	// direct EVAL tests against a redis service container; locally and in the
+	// release gate the Sentinel path is exercised instead.
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		client = redis.NewClient(&redis.Options{Addr: addr})
+	} else {
+		client = redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:    envOr("REDIS_MASTER_NAME", defaultMasterName),
+			SentinelAddrs: strings.Split(envOr("REDIS_SENTINEL_ADDRS", defaultSentinelAddrs), ","),
+			Password:      os.Getenv("REDIS_PASSWORD"),
+		})
+	}
 	defer client.Close()
 
 	code := m.Run()
