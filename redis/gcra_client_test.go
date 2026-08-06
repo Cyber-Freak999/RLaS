@@ -23,6 +23,11 @@ var (
 
 func newTestClient(t *testing.T) *redis.Client {
 	t.Helper()
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		c := redis.NewClient(&redis.Options{Addr: addr})
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
 	c := redisclient.NewFailoverClient(redisclient.FailoverConfig{
 		MasterName:    envOr("REDIS_MASTER_NAME", defaultMasterName),
 		SentinelAddrs: strings.Split(envOr("REDIS_SENTINEL_ADDRS", defaultSentinelAddrs), ","),
