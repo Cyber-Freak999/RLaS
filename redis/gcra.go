@@ -20,20 +20,37 @@ var gcraLua string
 // FailoverConfig is the subset of Sentinel connection options the services
 // read from the environment. Sentinel-aware only — never a static master
 // hostname (constraint 3).
+//
+// PoolSize and MinIdleConns are the go-redis connection pool tuning for the
+// hot path. The rate-limiter serves hundreds of concurrent /check requests,
+// each of which needs several sequential Redis round trips; go-redis's default
+// pool of 10×GOMAXPROCS (40 on a 4-CPU container) serializes that concurrency
+// into queueing latency, so the latency-critical service sizes the pool up.
+// 0 leaves go-redis's defaults, which is right for low-concurrency callers
+// like control-plane.
 type FailoverConfig struct {
 	MasterName    string
 	SentinelAddrs []string
 	Password      string
+	PoolSize      int
+	MinIdleConns  int
 }
 
 // NewFailoverClient builds a Sentinel-aware client pointing at whatever node
 // currently holds the master.
 func NewFailoverClient(cfg FailoverConfig) *redis.Client {
-	return redis.NewFailoverClient(&redis.FailoverOptions{
+	opts := &redis.FailoverOptions{
 		MasterName:    cfg.MasterName,
 		SentinelAddrs: cfg.SentinelAddrs,
 		Password:      cfg.Password,
-	})
+	}
+	if cfg.PoolSize > 0 {
+		opts.PoolSize = cfg.PoolSize
+	}
+	if cfg.MinIdleConns > 0 {
+		opts.MinIdleConns = cfg.MinIdleConns
+	}
+	return redis.NewFailoverClient(opts)
 }
 
 // Params mirrors the script's ARGV contract (constraint 13: the service
