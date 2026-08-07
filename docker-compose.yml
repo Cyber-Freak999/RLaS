@@ -193,10 +193,13 @@ services:
       # temp server that accepts TCP but hasn't created the POSTGRES_* role or
       # database yet, so control-plane would start early and crash-loop until
       # the real server is up. Verify the actual role+db over the network.
+      # retries cover a cold initdb (~6 min on a fresh volume): staying
+      # "starting" (never "unhealthy") is what lets `docker compose up` wait
+      # through first boot without manual intervention.
       test: ["CMD-SHELL", "PGPASSWORD=$${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} -tAc 'SELECT 1' | grep -q 1"]
       interval: 5s
       timeout: 3s
-      retries: 15
+      retries: 90
       start_period: 10s
     restart: unless-stopped
     networks:
