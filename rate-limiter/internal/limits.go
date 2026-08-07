@@ -1,12 +1,6 @@
 package internal
 
-import (
-	"context"
-	"encoding/json"
-	"errors"
-
-	"github.com/redis/go-redis/v9"
-)
+import "errors"
 
 // Sentinel errors returned by the check path. The handler maps them to HTTP
 // statuses; the fallback path maps ErrUnauthorized/ErrLimits* to its own
@@ -19,8 +13,8 @@ var (
 
 // Limits is the per-client configuration stored by the control-plane as JSON
 // at client_limits:{client_id}. The admin boundary (constraint 13) guarantees
-// the values before they reach Redis; the rate-limiter re-validates
-// defensively because a bad stored value must not reach the Lua script.
+// the values before they reach Redis; check.lua re-validates defensively
+// because a bad stored value must not reach the GCRA math.
 type Limits struct {
 	Rate   int64  `json:"rate"`
 	Period string `json:"period"`
@@ -47,23 +41,4 @@ func (l Limits) PeriodSec() int64 {
 // special-cased.
 func (l Limits) Valid() bool {
 	return l.Rate > 0 && l.PeriodSec() > 0 && l.Burst >= 1
-}
-
-// LoadLimits reads and parses client_limits:{client_id}.
-func LoadLimits(ctx context.Context, c redis.Cmdable, clientID string) (Limits, error) {
-	raw, err := c.Get(ctx, limitsKey(clientID)).Result()
-	if errors.Is(err, redis.Nil) {
-		return Limits{}, ErrLimitsNotFound
-	}
-	if err != nil {
-		return Limits{}, err
-	}
-	var l Limits
-	if err := json.Unmarshal([]byte(raw), &l); err != nil {
-		return Limits{}, ErrLimitsInvalid
-	}
-	if !l.Valid() {
-		return Limits{}, ErrLimitsInvalid
-	}
-	return l, nil
 }

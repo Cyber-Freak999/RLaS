@@ -25,9 +25,9 @@ func main() {
 	defer client.Close()
 
 	limiter := internal.NewLimiter(internal.LimiterOptions{
-		Redis:  client,
-		GCRA:   redisclient.NewGCRA(client),
-		Logger: logger,
+		Redis:   client,
+		Checker: redisclient.NewChecker(client),
+		Logger:  logger,
 	})
 
 	srv := &http.Server{
