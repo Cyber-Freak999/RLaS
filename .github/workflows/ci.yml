@@ -8,6 +8,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual re-kick: lets us re-trigger the exact same job on a PR head ref via
+  # `gh workflow run ci.yml --ref <branch>` when a run is stuck or lost to a
+  # GitHub Actions outage, instead of the close/reopen PR dance.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,6 +37,11 @@ jobs:
         with:
           go-version-file: redis/go.mod
           cache: true
+          # Both modules have their own go.sum; point the cache at them or it
+          # silently never restores (go.mod/go.sum are not at the repo root).
+          cache-dependency-path: |
+            redis/go.sum
+            rate-limiter/go.sum
 
       - name: vet + test (redis)
         working-directory: redis
