@@ -1,0 +1,26 @@
+name: rlas
+
+# Test overlay — deliberately NOT part of normal startup (README §3). Adds a
+# k6 service on the backend network that provisions clients via the control
+# plane admin API and drives /check through nginx. Run one-shot, e.g.:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml \
+#     run --rm k6 run /scripts/correctness.js
+#
+# k6 has no Docker access (chaos orchestration stays in bash), so this service
+# is pure HTTP load + assertions.
+
+services:
+  k6:
+    image: grafana/k6
+    volumes:
+      - ./k6:/scripts
+    environment:
+      ADMIN_BEARER_TOKEN: ${ADMIN_BEARER_TOKEN:?ADMIN_BEARER_TOKEN must be set in .env}
+    depends_on:
+      nginx:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    networks:
+      - backend
