@@ -164,9 +164,11 @@ services:
       # Host access for manual verification / store tests outside compose.
       - "127.0.0.1:5433:5432"
     healthcheck:
-      # pg_isready gates control-plane startup so the schema never races the
-      # database coming up (depends_on: service_healthy, constraint 11).
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-timescale} -d ${POSTGRES_DB:-rlas}"]
+      # pg_isready alone is not enough: the postgres image's initdb runs a
+      # temp server that accepts TCP but hasn't created the POSTGRES_* role or
+      # database yet, so control-plane would start early and crash-loop until
+      # the real server is up. Verify the actual role+db over the network.
+      test: ["CMD-SHELL", "PGPASSWORD=$${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} -tAc 'SELECT 1' | grep -q 1"]
       interval: 5s
       timeout: 3s
       retries: 15
