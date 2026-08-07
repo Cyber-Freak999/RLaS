@@ -97,6 +97,12 @@ An `X-RateLimit-Degraded: true` header is present whenever a response was served
 from a replica's local circuit-breaker fallback rather than authoritative Redis
 state (see §5, fail-safe behavior).
 
+Every response also carries an `X-Replica` header with the container hostname
+of the replica that served it (unique per replica). Firing several requests and
+watching it rotate across 3 distinct values is the quickest proof that nginx is
+balancing traffic round-robin across the whole fleet rather than pinning one
+replica:
+
 ---
 
 ## 3. Running the tests
@@ -105,33 +111,51 @@ Tests are intentionally **not** part of `docker compose up` — starting the sys
 and testing it are kept as two separate, explicit steps.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm k6
+for i in 1 2 3 4 5 6; do
+  curl -s -D - -o /dev/null -X POST http://localhost:8080/v1/check \
+    -H "X-Api-Key: $CLIENT_API_KEY" -d '{"cost": 1}' | grep -i x-replica
+done
 ```
 
-This runs three scenarios in sequence against the already-running system.
-The chaos scenario is driven by a thin shell wrapper (`k6/chaos-runner.sh`) —
-k6 has no Docker access, so the wrapper starts the k6 load in the background,
-sleeps briefly, runs `docker compose stop redis-master`, sleeps through the
-test window, runs `docker compose start redis-master`, then waits for k6 and
-checks its exit code. k6 itself only ever does HTTP load and assertions;
-container orchestration stays in bash.
+---
 
-1. **`correctness_under_load.js`** — multiple named virtual-client profiles (Client A
-   at 100 req/min, Client B at 5000 req/min) hammer `/check` concurrently through
-   nginx; asserts each client receives exactly their configured number of successes,
-   no more, no fewer.
-2. **`latency.js`** — sustained load (10,000 req/sec aggregate across all 3
-   replicas) with threshold assertions on end-to-end latency through nginx:
-   p95 < 10ms and p99 < 20ms. The test fails the build if a threshold is
+## 3. Running the tests
+
+Tests are intentionally **not** part of `docker compose up` — starting the system
+and testing it are kept as two separate, explicit steps.
+
+```bash
+# Correctness: exact per-client quota across the 3 replicas + replica-spread check
+./k6/run-correctness.sh
+
+# Latency: p95 < 10ms / p99 < 20ms through nginx
+./k6/run-latency.sh
+```
+
+Each wrapper is a thin shell script: it runs the k6 scenario in a throwaway
+container from the test overlay (`docker-compose.test.yml`) against the
+already-running system, then checks the exit code. `run-correctness.sh` also
+reads each replica's `/metrics` and fails unless all 3 replicas served traffic.
+
+1. **`correctness.js`** — three named virtual-client profiles (Client A burst 1000
+   at 1 req/hour, Client B burst 200, Client C burst 100 with `cost: 5`) hammer
+   `/check` concurrently through nginx; asserts each client receives exactly
+   their configured number of `200`s and `429`s — no more, no fewer. Exactness
+   is possible because `period: "hour"` refills less than one token during the
+   run, so the allowed/denied split is bit-exact.
+2. **`latency.js`** — sustained below-limit load (≈10,000 req/sec aggregate
+   across all 3 replicas) with threshold assertions on end-to-end latency
+   through nginx: p95 < 10ms and p99 < 20ms. The test fails if a threshold is
    breached. True server-side latency (p99 < 5ms) is tracked separately via each
    service's Prometheus histogram on the ops dashboard — k6 can't observe that
    number through the load balancer, so the two thresholds are defined and
    measured independently.
-3. **`chaos_redis_outage.js`** — starts load, then automatically stops the
+3. **`chaos` scenario (M6)** — starts load, then automatically stops the
    `redis-master` container mid-run, asserts requests continue succeeding via the
    local fallback (fail-open, `X-RateLimit-Degraded: true`) rather than erroring,
-   restarts `redis-master`, and asserts the system recovers without a restart of the
-   rate-limiter service.
+   restarts `redis-master`, and asserts the system recovers without a restart of
+   the rate-limiter service. Orchestration stays in `k6/chaos-runner.sh` — k6
+   has no Docker access.
 
 Unit-level race safety (`go test -race ./...`) is run separately as part of each
 service's own test suite:
@@ -146,7 +170,8 @@ docker compose run --rm rate-limiter go test -race ./...
 
 | Scenario | How to verify |
 |---|---|
-| Cluster-wide accuracy | Run `correctness_under_load.js` above, or manually fire concurrent requests at two different replica ports (`:8080` routes through nginx to all three) for the same client and confirm the combined success count matches their configured limit exactly. |
+| Cluster-wide accuracy | Run `./k6/run-correctness.sh` (exact per-client counts + all 3 replicas served traffic), or manually fire concurrent requests at the LB (`:8080`) for the same client and confirm the combined success count matches their configured limit exactly. |
+| Replica spread | Fire requests through `:8080` and watch the `X-Replica` header rotate across 3 distinct hostnames; the correctness wrapper asserts this programmatically. |
 | Fail-safe on Redis outage | `docker compose stop redis-master`; watch `docker compose logs -f rate-limiter` for a `circuit_breaker_tripped` log line; confirm `/check` still returns `200`/`429` (not `503`) with `X-RateLimit-Degraded: true`; `docker compose start redis-master`; confirm the degraded header disappears once Sentinel reports the primary healthy again. |
 | Limit change consistency | `PUT /admin/clients/{id}/limits` with a new rate; confirm the client's GCRA state resets (their next `/check` shows a fresh `remaining` under the new rate, not a stale value computed under the old one). |
 | Variable request cost | `POST /check` with `{"cost": 5}` for a client and confirm `remaining` drops by 5, not 1. |

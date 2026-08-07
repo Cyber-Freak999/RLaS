@@ -112,6 +112,12 @@ All routes are prefixed `/v1` (see constraint 14).
 Success `200`: `{"allowed": true, "remaining": int, "reset_at": timestamp}`.
 Rejected `429` + `Retry-After` header: `{"allowed": false, "remaining": 0, "reset_at": timestamp}`.
 Degraded responses (either code) additionally carry `X-RateLimit-Degraded: true`.
+Every response also carries `X-Replica: <container hostname>` (unique per
+replica) so tests can prove nginx spreads traffic across all 3 replicas; nginx
+must pass this header through unchanged.
+nginx must never treat a `429` as an upstream failure — `proxy_next_upstream`
+must keep its default (error/timeout/5xx only), or a saturated bucket would
+yank the correct replica out of rotation.
 
 **`/v1/admin/*`** — header `Authorization: Bearer <admin token>`.
 - `POST /v1/admin/clients` → `{client_id, api_key}` (key shown once).
