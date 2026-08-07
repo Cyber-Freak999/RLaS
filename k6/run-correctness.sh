@@ -15,28 +15,46 @@ if ! docker compose ps --format '{{.Service}}' 2>/dev/null | grep -q '^rate-limi
   exit 1
 fi
 
-echo "==> correctness: exact per-client quota through nginx"
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm k6 run /scripts/correctness.js
-
-echo "==> replica spread + fleet cross-check (per-replica /metrics)"
 mapfile -t ids < <(docker compose ps -q rate-limiter)
 if [ "${#ids[@]}" -ne 3 ]; then
   echo "error: expected 3 rate-limiter replicas, got ${#ids[@]}" >&2
   exit 1
 fi
 
+replica_metrics() {
+  local ip metrics total allowed
+  ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1")
+  metrics=$(curl -fsS --max-time 5 "http://${ip}:8080/metrics" || true)
+  total=$(printf '%s\n' "$metrics" | grep '^rlas_checks_total' | awk '{s += $NF} END {print s + 0}')
+  allowed=$(printf '%s\n' "$metrics" | grep '^rlas_checks_total' | grep 'allowed="true"' | awk '{s += $NF} END {print s + 0}')
+  printf '%s %s\n' "$total" "$allowed"
+}
+
+# Per-replica /metrics counters are cumulative for the container's lifetime, so
+# diff against a pre-run snapshot to attribute only this run's traffic.
+before=()
+for id in "${ids[@]}"; do
+  before+=("$(replica_metrics "$id")")
+done
+before_total=0
+for v in "${before[@]}"; do before_total=$((before_total + ${v%% *})); done
+echo "==> baseline (cumulative before this run): ${before_total} requests across fleet"
+
+echo "==> correctness: exact per-client quota through nginx"
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm k6 run /scripts/correctness.js
+
 fleet_allowed=0
 fleet_total=0
 spread_ok=1
-for id in "${ids[@]}"; do
-  ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$id")
-  metrics=$(curl -fsS --max-time 5 "http://${ip}:8080/metrics" || true)
-  rep_total=$(printf '%s\n' "$metrics" | grep '^rlas_checks_total' | awk '{s += $NF} END {print s + 0}')
-  rep_allowed=$(printf '%s\n' "$metrics" | grep '^rlas_checks_total' | grep 'allowed="true"' | awk '{s += $NF} END {print s + 0}')
-  echo "  replica ${id}: total=${rep_total} allowed=${rep_allowed}"
-  fleet_allowed=$((fleet_allowed + rep_allowed))
-  fleet_total=$((fleet_total + rep_total))
-  if [ "${rep_total}" -le 0 ]; then
+for i in "${!ids[@]}"; do
+  read -r rep_total rep_allowed <<<"$(replica_metrics "${ids[$i]}")"
+  read -r pre_total pre_allowed <<<"${before[$i]}"
+  delta_total=$((rep_total - pre_total))
+  delta_allowed=$((rep_allowed - pre_allowed))
+  echo "  replica ${ids[$i]}: delta_total=${delta_total} delta_allowed=${delta_allowed}"
+  fleet_allowed=$((fleet_allowed + delta_allowed))
+  fleet_total=$((fleet_total + delta_total))
+  if [ "${delta_total}" -le 0 ]; then
     spread_ok=0
   fi
 done

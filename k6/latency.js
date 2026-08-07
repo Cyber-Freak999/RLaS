@@ -43,7 +43,13 @@ export function setup() {
   if (put.status !== 200) {
     throw new Error(`put limits failed: ${put.status} ${put.body}`);
   }
-  return { api_key };
+  return { client_id, api_key };
+}
+
+export function teardown(data) {
+  http.del(`${ADMIN}/v1/admin/clients/${data.client_id}`, null, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
 }
 
 export function latencyLoad(data) {
