@@ -1,6 +1,6 @@
-# Small PR workflow (AGENTS.md "CI policy"): go vet + go test -race for both
-# modules. The heavy compose + k6 suite stays a local/release gate. The job
-# name is deliberately a single "build-and-test" so it maps 1:1 onto the
+# Small PR workflow (AGENTS.md "CI policy"): go vet + go test -race for all
+# three modules. The heavy compose + k6 suite stays a local/release gate. The
+# job name is deliberately a single "build-and-test" so it maps 1:1 onto the
 # required status check wired into the main branch protection rule.
 name: CI
 
@@ -37,11 +37,12 @@ jobs:
         with:
           go-version-file: redis/go.mod
           cache: true
-          # Both modules have their own go.sum; point the cache at them or it
+          # Each module has its own go.sum; point the cache at them all or it
           # silently never restores (go.mod/go.sum are not at the repo root).
           cache-dependency-path: |
             redis/go.sum
             rate-limiter/go.sum
+            control-plane/go.sum
 
       - name: vet + test (redis)
         working-directory: redis
@@ -51,6 +52,12 @@ jobs:
 
       - name: vet + test (rate-limiter)
         working-directory: rate-limiter
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: vet + test (control-plane)
+        working-directory: control-plane
         run: |
           go vet ./...
           go test -race -count=1 ./...
