@@ -198,6 +198,24 @@ Degraded responses (either code) additionally carry `X-RateLimit-Degraded: true`
   at M2 — GitHub requires a check to exist before it can be required, so this
   is deliberately a two-step change, not an oversight.
 - **CD:** none. `main` is the deliverable.
+- **CI outage playbook.** When the required `build-and-test` check goes red, it
+  may be a GitHub Actions infrastructure outage, not a code failure — do not
+  panic, do not weaken branch protection to merge (never reconfigure the rule
+  for this). Follow this order:
+  1. *Recognize.* If the run log ends at `Set up job` / `Getting action
+     download info` with `Service Unavailable` or `Internal Server Error`, or
+     fails with `The job was not acquired by Runner`, the workflow never ran
+     your steps — the failure is GitHub-side. Zero `go test` output = zero
+     signal about your code.
+  2. *Confirm.* Check https://www.githubstatus.com — wait for `Actions` to
+     return to `operational` before re-running; a re-run during the outage
+     just queues and fails again.
+  3. *Recover.* Once clear, `gh run rerun <run-id>`. If the run is stuck
+     "queued" and rerun refuses it ("cannot be rerun; its workflow file may be
+     broken"), re-kick the same job on the PR head via
+     `gh workflow run ci.yml --ref <branch>`, or fall back to close+reopen the
+     PR to emit a fresh `pull_request` event.
+  4. *Verify.* `gh run watch` to completion; merge only on green.
 
 ## Pre-build checklist (small decisions, easy to forget)
 
