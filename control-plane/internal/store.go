@@ -25,16 +25,19 @@ func NewPGStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{pool: pool}
 }
 
-// InsertApproved inserts idempotently: ON CONFLICT (event_id) DO NOTHING makes
-// a redelivered stream entry (crash between insert and XACK) a no-op rather
-// than a duplicate billing row (constraint 5). ts is derived from the check
-// time, not the consumer's wall clock, so analytics reflect when the request
-// actually happened.
+// InsertApproved inserts idempotently: ON CONFLICT (event_id, ts) DO NOTHING
+// makes a redelivered stream entry (crash between insert and XACK) a no-op
+// rather than a duplicate billing row (constraint 5). ts is part of the
+// conflict target because TimescaleDB requires unique indexes to include the
+// partitioning column; a redelivery is the same entry, so both event_id and ts
+// repeat and the conflict still fires. ts is derived from the check time, not
+// the consumer's wall clock, so analytics reflect when the request actually
+// happened.
 func (s *PGStore) InsertApproved(ctx context.Context, eventID, clientID string, cost int64, tsMS int64) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO approved_requests (event_id, client_id, cost, ts)
 		 VALUES ($1, $2, $3, to_timestamp($4::double precision / 1000.0))
-		 ON CONFLICT (event_id) DO NOTHING`,
+		 ON CONFLICT (event_id, ts) DO NOTHING`,
 		eventID, clientID, cost, tsMS)
 	return err
 }

@@ -12,11 +12,16 @@ import (
 // hypertable conversion must follow the table creation anyway.
 func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	stmts := []string{
+		// The primary key must include ts, the partitioning column: TimescaleDB
+		// rejects any unique index that omits a partitioning column (SQLSTATE
+		// TS103). A redelivered stream entry carries the same event_id AND the
+		// same ts, so (event_id, ts) still dedupes at-least-once delivery.
 		`CREATE TABLE IF NOT EXISTS approved_requests (
-			event_id  text PRIMARY KEY,
+			event_id  text NOT NULL,
 			client_id text NOT NULL,
 			cost      int NOT NULL,
-			ts        timestamptz NOT NULL
+			ts        timestamptz NOT NULL,
+			PRIMARY KEY (event_id, ts)
 		)`,
 		// Time-series hypertable on ts; if_not_exists makes restart-safe.
 		`SELECT create_hypertable('approved_requests', 'ts', if_not_exists => TRUE)`,
