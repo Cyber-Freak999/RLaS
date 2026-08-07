@@ -250,6 +250,36 @@ func TestApprovedRequestPushedToStream(t *testing.T) {
 	}
 }
 
+// TestCheckCarriesXReplicaHeader proves every /v1/check response is stamped
+// with the serving replica's hostname. M4 relies on this header to show traffic
+// spread across all 3 replicas behind nginx, so it must be present on allowed,
+// rejected, and degraded responses alike.
+func TestCheckCarriesXReplicaHeader(t *testing.T) {
+	c := testRedis(t)
+	apiKey := fmt.Sprintf("key-%s", t.Name())
+	clientID := fmt.Sprintf("client-%s", t.Name())
+	seedClient(t, c, apiKey, clientID, Limits{Rate: 1, Period: "second", Burst: 1})
+	srv := newTestServer(t, c, testLogger())
+
+	want, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("hostname: %v", err)
+	}
+
+	resp, _ := doCheck(t, srv.URL, apiKey, "")
+	if got := resp.Header.Get("X-Replica"); got != want {
+		t.Fatalf("allowed response X-Replica = %q, want %q", got, want)
+	}
+
+	resp, _ = doCheck(t, srv.URL, apiKey, "")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second request: status %d, want 429", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Replica"); got != want {
+		t.Fatalf("rejected response X-Replica = %q, want %q", got, want)
+	}
+}
+
 func TestHealthzOK(t *testing.T) {
 	c := testRedis(t)
 	srv := newTestServer(t, c, testLogger())
