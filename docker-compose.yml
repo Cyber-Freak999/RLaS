@@ -2,6 +2,7 @@ name: rlas
 
 # Core services only. The k6 test overlay lives in docker-compose.test.yml so
 # starting the system and testing it stay two separate steps (see README §3).
+# nginx is the single entry point to the 3-replica rate-limiter fleet.
 
 services:
   redis-master:
@@ -126,13 +127,15 @@ services:
     build:
       context: .
       dockerfile: rate-limiter/Dockerfile
+    # 3 replicas behind nginx (M4). Replicas are internal-only — no host port;
+    # nginx is the sole entry point on 127.0.0.1:8080.
+    deploy:
+      replicas: 3
     environment:
       REDIS_SENTINEL_ADDRS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
       REDIS_MASTER_NAME: mymaster
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       PORT: "8080"
-    ports:
-      - "127.0.0.1:8080:8080"
     depends_on:
       redis-sentinel-1:
         condition: service_healthy
@@ -144,6 +147,28 @@ services:
       # Hits the real dependency-aware /healthz (constraint 11): Redis down =>
       # 503 => compose marks the container unhealthy, not a fake liveness check.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      # The only public entry point to the rate-limiter fleet.
+      - "127.0.0.1:8080:80"
+    depends_on:
+      # nginx learns all 3 replicas via the embedded DNS resolver (`resolve`),
+      # so this is ordering, not a guarantee about replica count.
+      rate-limiter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
       interval: 5s
       timeout: 3s
       retries: 10
