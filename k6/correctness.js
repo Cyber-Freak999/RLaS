@@ -14,6 +14,12 @@ const ADMIN = 'http://control-plane:8081';
 const CHECK = 'http://nginx:80';
 const TOKEN = __ENV.ADMIN_BEARER_TOKEN;
 
+// 429 is the intended answer once a bucket is exhausted, so it is an expected
+// status here — k6's default responseCallback counts every 4xx/5xx as a failed
+// request, which would drown the real http_req_failed signal in legitimate
+// quota denials.
+http.setResponseCallback(http.expectedStatuses(200, 429));
+
 const cA200 = new Counter('client_a_200');
 const cA429 = new Counter('client_a_429');
 const cB200 = new Counter('client_b_200');
@@ -65,6 +71,15 @@ export function setup() {
     b: provision({ rate: 1, period: 'hour', burst: 200 }),
     c: provision({ rate: 1, period: 'hour', burst: 100 }),
   };
+}
+
+// Each run provisions three clients; delete them so repeated gate runs don't
+// accumulate stale state in the client list.
+export function teardown(data) {
+  const headers = { Authorization: `Bearer ${TOKEN}` };
+  for (const c of [data.a, data.b, data.c]) {
+    http.del(`${ADMIN}/v1/admin/clients/${c.client_id}`, null, { headers });
+  }
 }
 
 function hit(apiKey, cost) {
