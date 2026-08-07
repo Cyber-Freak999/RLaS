@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -15,6 +16,17 @@ import (
 
 	"rlas/redis"
 )
+
+// replicaID is the container/process hostname, resolved once at startup. Each
+// replica in the scaled compose service has a unique container hostname, which
+// is what lets an observer correlate /v1/check responses with the replica that
+// served them (X-Replica header).
+var replicaID = func() string {
+	if h, err := os.Hostname(); err == nil {
+		return h
+	}
+	return "unknown"
+}()
 
 // Limiter is the /v1/check engine. It talks to Redis only for: API-key lookup,
 // limit-config read, the GCRA EVAL, and the Streams XADD (constraint 2).
@@ -143,6 +155,10 @@ func (l *Limiter) handleCheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+
+	// Stamp every response with the serving replica's hostname (M4). nginx
+	// passes it through, so tests can prove traffic spread across replicas.
+	w.Header().Set("X-Replica", replicaID)
 
 	apiKey := r.Header.Get("X-Api-Key")
 	if apiKey == "" {
