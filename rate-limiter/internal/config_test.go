@@ -6,7 +6,7 @@ import (
 )
 
 func TestLoadConfigDefaults(t *testing.T) {
-	for _, k := range []string{"REDIS_MASTER_NAME", "REDIS_SENTINEL_ADDRS", "REDIS_PASSWORD", "PORT", "SHUTDOWN_TIMEOUT"} {
+	for _, k := range []string{"REDIS_MASTER_NAME", "REDIS_SENTINEL_ADDRS", "REDIS_PASSWORD", "PORT", "SHUTDOWN_TIMEOUT", "REDIS_POOL_SIZE", "REDIS_MIN_IDLE"} {
 		t.Setenv(k, "")
 	}
 	cfg := LoadConfig()
@@ -22,6 +22,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("default shutdown timeout = %s, want 10s", cfg.ShutdownTimeout)
 	}
+	if cfg.Redis.PoolSize != defaultRedisPoolSize {
+		t.Fatalf("default pool size = %d, want %d", cfg.Redis.PoolSize, defaultRedisPoolSize)
+	}
+	if cfg.Redis.MinIdleConns != defaultRedisMinIdle {
+		t.Fatalf("default min idle = %d, want %d", cfg.Redis.MinIdleConns, defaultRedisMinIdle)
+	}
 }
 
 func TestLoadConfigOverrides(t *testing.T) {
@@ -30,6 +36,8 @@ func TestLoadConfigOverrides(t *testing.T) {
 	t.Setenv("REDIS_PASSWORD", "pw")
 	t.Setenv("PORT", "9000")
 	t.Setenv("SHUTDOWN_TIMEOUT", "2s")
+	t.Setenv("REDIS_POOL_SIZE", "500")
+	t.Setenv("REDIS_MIN_IDLE", "50")
 	cfg := LoadConfig()
 	if cfg.Redis.MasterName != "testmaster" {
 		t.Fatalf("master name = %q", cfg.Redis.MasterName)
@@ -42,5 +50,11 @@ func TestLoadConfigOverrides(t *testing.T) {
 	}
 	if cfg.Port != 9000 || cfg.ShutdownTimeout != 2*time.Second {
 		t.Fatalf("port=%d timeout=%s", cfg.Port, cfg.ShutdownTimeout)
+	}
+	if cfg.Redis.PoolSize != 500 {
+		t.Fatalf("pool size = %d, want 500", cfg.Redis.PoolSize)
+	}
+	if cfg.Redis.MinIdleConns != 50 {
+		t.Fatalf("min idle = %d, want 50", cfg.Redis.MinIdleConns)
 	}
 }

@@ -24,11 +24,23 @@ func LoadConfig() Config {
 			MasterName:    envOr("REDIS_MASTER_NAME", "mymaster"),
 			SentinelAddrs: splitCSV(envOr("REDIS_SENTINEL_ADDRS", "127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381")),
 			Password:      os.Getenv("REDIS_PASSWORD"),
+			// Sized for the hot path: each /check needs several sequential Redis
+			// round trips, so a pool of 10×GOMAXPROCS serializes concurrent
+			// requests into hundreds of ms of queueing. 250 on a 4-CPU
+			// container comfortably covers the load nginx spreads across 3
+			// replicas.
+			PoolSize:     envInt("REDIS_POOL_SIZE", defaultRedisPoolSize),
+			MinIdleConns: envInt("REDIS_MIN_IDLE", defaultRedisMinIdle),
 		},
 		Port:            envInt("PORT", 8080),
 		ShutdownTimeout: envDur("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 }
+
+const (
+	defaultRedisPoolSize = 250
+	defaultRedisMinIdle  = 25
+)
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
