@@ -152,6 +152,64 @@ services:
     networks:
       - backend
 
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-timescale}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-timescale}
+      POSTGRES_DB: ${POSTGRES_DB:-rlas}
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready gates control-plane startup so the schema never races the
+      # database coming up (depends_on: service_healthy, constraint 11).
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-timescale} -d ${POSTGRES_DB:-rlas}"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    environment:
+      # Required: compose fails fast if ADMIN_BEARER_TOKEN is unset rather than
+      # booting an admin API with no auth (constraint 8).
+      ADMIN_BEARER_TOKEN: ${ADMIN_BEARER_TOKEN:?ADMIN_BEARER_TOKEN must be set in .env}
+      # Single DSN derived from the TimescaleDB container credentials so the
+      # compose wiring has exactly one source of truth for the analytics DB.
+      TIMESCALE_DSN: postgres://${POSTGRES_USER:-timescale}:${POSTGRES_PASSWORD:-timescale}@timescaledb:5432/${POSTGRES_DB:-rlas}?sslmode=disable
+      REDIS_SENTINEL_ADDRS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_MASTER_NAME: mymaster
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      PORT: "8081"
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      # Real dependency-aware /healthz (constraint 11): Redis or TimescaleDB
+      # down => 503 => compose marks the container unhealthy.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - backend
+
 networks:
   backend:
     ipam:
@@ -164,3 +222,4 @@ volumes:
   redis-sentinel-1-data:
   redis-sentinel-2-data:
   redis-sentinel-3-data:
+  timescale-data:
