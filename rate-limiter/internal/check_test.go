@@ -64,7 +64,7 @@ func seedClient(t *testing.T, c redis.Cmdable, apiKey, clientID string, lim Limi
 
 func newTestServer(t *testing.T, c redis.Cmdable, logger *slog.Logger) *httptest.Server {
 	t.Helper()
-	lim := NewLimiter(LimiterOptions{Redis: c, GCRA: redisclient.NewGCRA(c), Logger: logger})
+	lim := NewLimiter(LimiterOptions{Redis: c, Logger: logger})
 	ts := httptest.NewServer(Server(lim))
 	t.Cleanup(ts.Close)
 	return ts
@@ -315,7 +315,7 @@ func TestDegradedServesTrafficAndTrips(t *testing.T) {
 	dead := deadRedis()
 	t.Cleanup(func() { _ = dead.Close() })
 
-	lim := NewLimiter(LimiterOptions{Redis: dead, GCRA: redisclient.NewGCRA(dead), Logger: logger})
+	lim := NewLimiter(LimiterOptions{Redis: dead, Logger: logger})
 	hash := HashAPIKey("degraded-key")
 	lim.cache.rememberKey(hash, "degraded-client")
 	// Refill is 1 token/hour so the slow (failing) dials never refill the
@@ -363,7 +363,7 @@ func TestDegradedServesTrafficAndTrips(t *testing.T) {
 func TestDegradedUnknownKeyUnauthorized(t *testing.T) {
 	dead := deadRedis()
 	t.Cleanup(func() { _ = dead.Close() })
-	lim := NewLimiter(LimiterOptions{Redis: dead, GCRA: redisclient.NewGCRA(dead), Logger: testLogger()})
+	lim := NewLimiter(LimiterOptions{Redis: dead, Logger: testLogger()})
 	srv := httptest.NewServer(Server(lim))
 	defer srv.Close()
 
@@ -379,7 +379,7 @@ func TestDegradedUnknownKeyUnauthorized(t *testing.T) {
 func TestHealthzUnhealthyWhenRedisDown(t *testing.T) {
 	dead := deadRedis()
 	t.Cleanup(func() { _ = dead.Close() })
-	lim := NewLimiter(LimiterOptions{Redis: dead, GCRA: redisclient.NewGCRA(dead), Logger: testLogger()})
+	lim := NewLimiter(LimiterOptions{Redis: dead, Logger: testLogger()})
 	srv := httptest.NewServer(Server(lim))
 	defer srv.Close()
 

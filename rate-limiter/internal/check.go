@@ -28,38 +28,50 @@ var replicaID = func() string {
 	return "unknown"
 }()
 
-// Limiter is the /v1/check engine. It talks to Redis only for: API-key lookup,
-// limit-config read, the GCRA EVAL, and the Streams XADD (constraint 2).
+// Limiter is the /v1/check engine. Auth, limit lookup, the GCRA bucket, and
+// the Streams XADD all happen inside check.lua, so one /v1/check is exactly
+// one Redis round trip (constraint 1) and this service's Redis surface stays
+// minimal (constraint 2).
 type Limiter struct {
-	redis   redis.Cmdable
-	gcra    *redisclient.GCRA
-	breaker *circuitBreaker
-	cache   *fallbackStore
-	streams *StreamWriter
-	logger  *slog.Logger
-	now     func() time.Time
+	redis     redis.Cmdable
+	checker   *redisclient.Checker
+	checkKeys redisclient.CheckKeys
+	breaker   *circuitBreaker
+	cache     *fallbackStore
+	logger    *slog.Logger
+	now       func() time.Time
 }
 
 type LimiterOptions struct {
-	Redis  redis.Cmdable
-	GCRA   *redisclient.GCRA
-	Logger *slog.Logger
+	Redis   redis.Cmdable
+	Checker *redisclient.Checker
+	Logger  *slog.Logger
 }
 
 func NewLimiter(opts LimiterOptions) *Limiter {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.Checker == nil {
+		opts.Checker = redisclient.NewChecker(opts.Redis)
+	}
 	now := time.Now
 	l := &Limiter{
 		redis:   opts.Redis,
-		gcra:    opts.GCRA,
+		checker: opts.Checker,
+		// The script receives the schema as KEYS and resolves per-client keys
+		// itself; passing them here keeps the schema in exactly one place.
+		checkKeys: redisclient.CheckKeys{
+			APIKeys:      APIKeysKey,
+			LimitsPrefix: limitsKeyPref,
+			GcraPrefix:   gcraKeyPref,
+			Stream:       StreamKey,
+		},
 		breaker: newCircuitBreaker(opts.Logger, now),
 		cache:   newFallbackStore(),
 		logger:  opts.Logger,
 		now:     now,
 	}
-	l.streams = newStreamWriter(opts.Redis, opts.Logger)
 	return l
 }
 
@@ -74,52 +86,52 @@ type CheckOutcome struct {
 	Err       error
 }
 
-// Check runs the happy path against Redis and falls back to the local token
-// bucket on any check-path Redis failure.
+// Check runs the happy path against Redis in one atomic EVAL and falls back to
+// the local token bucket on any check-path Redis failure.
 func (l *Limiter) Check(ctx context.Context, apiKey string, cost int64) CheckOutcome {
 	hash := HashAPIKey(apiKey)
 
-	clientID, err := Authenticate(ctx, l.redis, apiKey)
-	if err != nil {
-		if errors.Is(err, ErrUnauthorized) {
-			l.breaker.onSuccess() // Redis answered; the key is simply unknown.
-			return CheckOutcome{Err: ErrUnauthorized}
-		}
-		l.breaker.onFailure()
-		return l.fallback(hash, cost)
-	}
-	l.cache.rememberKey(hash, clientID)
-
-	lim, err := LoadLimits(ctx, l.redis, clientID)
-	if err != nil {
-		if errors.Is(err, ErrLimitsNotFound) || errors.Is(err, ErrLimitsInvalid) {
-			l.breaker.onSuccess() // Redis answered; stored config is broken.
-			return CheckOutcome{Err: err}
-		}
-		l.breaker.onFailure()
-		return l.fallback(hash, cost)
-	}
-	l.cache.rememberLimits(clientID, lim)
-
-	res, err := l.gcra.Check(ctx, l.redis, gcraKey(clientID), redisclient.Params{
-		Burst:     lim.Burst,
-		Rate:      lim.Rate,
-		PeriodSec: lim.PeriodSec(),
-		Cost:      cost,
+	reply, err := l.checker.Check(ctx, l.redis, l.checkKeys, redisclient.CheckParams{
+		APIKeyHash:   hash,
+		Cost:         cost,
+		StreamMaxLen: StreamMaxLen,
 	})
 	if err != nil {
+		// A failed EVAL means Redis didn't answer (network/script error), never
+		// a deliberate deny — fail open into the degraded path.
 		l.breaker.onFailure()
 		return l.fallback(hash, cost)
 	}
-	l.breaker.onSuccess()
+	l.breaker.onSuccess() // Redis answered; any status is a decision, not an outage.
 
-	if res.Allowed {
-		// The approved response is committed; never let the analytics push turn
-		// it into an error (constraint 5).
-		l.streams.Push(ctx, clientID, cost, res.NowMS)
-		return CheckOutcome{Allowed: true, Remaining: res.Remaining, ResetAtMS: res.ResetAtMS, NowMS: res.NowMS}
+	switch reply.Status {
+	case redisclient.StatusUnauthorized:
+		return CheckOutcome{Err: ErrUnauthorized}
+	case redisclient.StatusLimitsNotFound:
+		return CheckOutcome{Err: ErrLimitsNotFound}
+	case redisclient.StatusLimitsInvalid:
+		return CheckOutcome{Err: ErrLimitsInvalid}
+	case redisclient.StatusBadParams:
+		// The HTTP boundary validates cost >= 1, so reaching this is a
+		// programming error and must not masquerade as a deny or an outage.
+		l.logger.Error("check_bad_params", "cost", cost)
+		return CheckOutcome{Err: errors.New("bad check parameters")}
 	}
-	return CheckOutcome{Allowed: false, Remaining: 0, ResetAtMS: res.ResetAtMS, NowMS: res.NowMS}
+
+	// Allowed or denied: refresh the fail-open cache from the same round trip
+	// that produced the answer. The key is remembered whenever Redis resolved
+	// it; limits only when they were present and valid.
+	if reply.ClientID != "" {
+		l.cache.rememberKey(hash, reply.ClientID)
+	}
+	if reply.Status == redisclient.StatusAllowed || reply.Status == redisclient.StatusDenied {
+		l.cache.rememberLimits(reply.ClientID, Limits{Rate: reply.Rate, Period: reply.Period, Burst: reply.Burst})
+	}
+
+	if reply.Status == redisclient.StatusAllowed {
+		return CheckOutcome{Allowed: true, Remaining: reply.Remaining, ResetAtMS: reply.ResetAtMS, NowMS: reply.NowMS}
+	}
+	return CheckOutcome{Allowed: false, Remaining: 0, ResetAtMS: reply.ResetAtMS, NowMS: reply.NowMS}
 }
 
 // fallback serves a degraded response from cached knowledge. A key the replica

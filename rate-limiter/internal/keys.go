@@ -11,4 +11,3 @@ const (
 )
 
 func limitsKey(id string) string { return limitsKeyPref + id }
-func gcraKey(id string) string   { return gcraKeyPref + id }
