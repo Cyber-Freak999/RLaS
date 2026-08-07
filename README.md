@@ -59,10 +59,16 @@ produce dropped-connection noise unrelated to the actual failure being tested.
 ### Provisioning a client
 
 ```bash
+# Step 1 — create the client. No body: this only mints a client_id + api_key.
 curl -X POST http://localhost:8081/v1/admin/clients \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"name": "client-a", "rate": 100, "period": "minute", "burst": 20}'
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 # => returns { "client_id": "...", "api_key": "..." } — the key is shown once
+
+# Step 2 — set its limits (no limits by default; GET /limits 404s until set).
+curl -X PUT http://localhost:8081/v1/admin/clients/$CLIENT_ID/limits \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"rate": 100, "period": "minute", "burst": 20}'
 ```
 
 ### Calling the rate limiter
