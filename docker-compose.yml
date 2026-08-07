@@ -160,6 +160,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-rlas}
     volumes:
       - timescale-data:/var/lib/postgresql/data
+    ports:
+      # Host access for manual verification / store tests outside compose.
+      - "127.0.0.1:5433:5432"
     healthcheck:
       # pg_isready gates control-plane startup so the schema never races the
       # database coming up (depends_on: service_healthy, constraint 11).
