@@ -28,7 +28,7 @@ func newTestStore(t *testing.T) *PGStore {
 		t.Skipf("timescaledb unreachable: %v", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
-		_ = pool.Close()
+		pool.Close()
 		t.Skipf("timescaledb unreachable: %v", err)
 	}
 	t.Cleanup(pool.Close)
