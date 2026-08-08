@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -373,6 +374,83 @@ func TestDegradedUnknownKeyUnauthorized(t *testing.T) {
 	}
 	if resp.Header.Get("X-RateLimit-Degraded") != "true" {
 		t.Fatalf("outage response must carry degraded header")
+	}
+}
+
+// TestCheckFailsFastWhenRedisHangs is the regression for the chaos-gate
+// finding: a *hung* Redis connection — not just an unreachable one — is what
+// a full-tier outage produces. go-redis doesn't fail fast when it can't reach
+// the master; it blocks retrying reads/sentinel discovery for tens of seconds
+// (the chaos gate saw ~40s requests), so the fail-open breaker never receives
+// the consecutive failures it needs to trip and /check stalls instead of
+// degrading. A black-hole TCP listener (accepts, never replies) reproduces the
+// hang; the check-path deadline must bound it so the fallback engages promptly.
+func TestCheckFailsFastWhenRedisHangs(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Never read or write: the client's command sits unanswered, like
+			// a dead master whose connection never closes.
+			_ = conn
+		}
+	}()
+
+	// Build the hung client through the shared factory (URL mode = plain
+	// client) so the test exercises the real bounded timeouts the deployment
+	// gets, not a hand-tuned client: ReadTimeout 300ms caps each hung attempt,
+	// and the check-path deadline (250ms below) stops retry stacking. Only the
+	// combination returns fast enough to trip the fail-open breaker.
+	c, err := redisclient.NewClient(redisclient.ClientConfig{URL: "redis://" + ln.Addr().String()})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	lim := NewLimiter(LimiterOptions{
+		Redis:        c,
+		Logger:       logger,
+		CheckTimeout: 250 * time.Millisecond,
+	})
+	hash := HashAPIKey("hang-key")
+	lim.cache.rememberKey(hash, "hang-client")
+	// Slow refill so the replica-local bucket never refills during the test.
+	lim.cache.rememberLimits("hang-client", Limits{Rate: 1, Period: "hour", Burst: 2})
+	srv := httptest.NewServer(Server(lim))
+	defer srv.Close()
+
+	start := time.Now()
+	for i := 0; i < 3; i++ {
+		resp, out := doCheck(t, srv.URL, "hang-key", "")
+		if resp.Header.Get("X-RateLimit-Degraded") != "true" {
+			t.Fatalf("request %d: missing degraded header", i)
+		}
+		// Burst 2: first two succeed, third is a degraded 429.
+		if i < 2 {
+			if resp.StatusCode != http.StatusOK || out["allowed"] != true {
+				t.Fatalf("request %d: expected degraded 200, got %d %v", i, resp.StatusCode, out)
+			}
+		} else if resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("request %d: expected degraded 429, got %d", i, resp.StatusCode)
+		}
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("3 checks took %v with Redis hanging; each must fail fast via the deadline", elapsed)
+	}
+	if !lim.BreakerOpen() {
+		t.Fatalf("breaker must trip after 3 hung failures")
+	}
+	if !strings.Contains(buf.String(), "circuit_breaker_tripped") {
+		t.Fatalf("missing circuit_breaker_tripped event")
 	}
 }
 

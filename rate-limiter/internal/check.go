@@ -39,20 +39,29 @@ func resolveReplicaID() string {
 // one Redis round trip (constraint 1) and this service's Redis surface stays
 // minimal (constraint 2).
 type Limiter struct {
-	redis     redis.Cmdable
-	checker   *redisclient.Checker
-	checkKeys redisclient.CheckKeys
-	breaker   *circuitBreaker
-	cache     *fallbackStore
-	logger    *slog.Logger
-	now       func() time.Time
+	redis        redis.Cmdable
+	checker      *redisclient.Checker
+	checkKeys    redisclient.CheckKeys
+	breaker      *circuitBreaker
+	cache        *fallbackStore
+	logger       *slog.Logger
+	now          func() time.Time
+	checkTimeout time.Duration
 }
 
 type LimiterOptions struct {
 	Redis   redis.Cmdable
 	Checker *redisclient.Checker
 	Logger  *slog.Logger
+	// CheckTimeout bounds one check-path Redis round trip. Without it a hung
+	// Redis connection — go-redis blocking on reads or sentinel discovery
+	// during a full outage — stalls /check for tens of seconds instead of
+	// failing fast into the fallback, and the circuit breaker never receives
+	// the consecutive failures it needs to trip. Zero uses the default.
+	CheckTimeout time.Duration
 }
+
+const defaultCheckTimeout = 500 * time.Millisecond
 
 func NewLimiter(opts LimiterOptions) *Limiter {
 	if opts.Logger == nil {
@@ -60,6 +69,10 @@ func NewLimiter(opts LimiterOptions) *Limiter {
 	}
 	if opts.Checker == nil {
 		opts.Checker = redisclient.NewChecker(opts.Redis)
+	}
+	checkTimeout := opts.CheckTimeout
+	if checkTimeout <= 0 {
+		checkTimeout = defaultCheckTimeout
 	}
 	now := time.Now
 	l := &Limiter{
@@ -73,10 +86,11 @@ func NewLimiter(opts LimiterOptions) *Limiter {
 			GcraPrefix:   gcraKeyPref,
 			Stream:       StreamKey,
 		},
-		breaker: newCircuitBreaker(opts.Logger, now),
-		cache:   newFallbackStore(),
-		logger:  opts.Logger,
-		now:     now,
+		breaker:      newCircuitBreaker(opts.Logger, now),
+		cache:        newFallbackStore(),
+		logger:       opts.Logger,
+		now:          now,
+		checkTimeout: checkTimeout,
 	}
 	return l
 }
@@ -96,6 +110,13 @@ type CheckOutcome struct {
 // the local token bucket on any check-path Redis failure.
 func (l *Limiter) Check(ctx context.Context, apiKey string, cost int64) CheckOutcome {
 	hash := HashAPIKey(apiKey)
+
+	// The deadline is what turns a hung connection into a hard failure: on a
+	// total Redis outage go-redis blocks on reads/sentinel discovery instead
+	// of erroring, and only an aborted context returns fast enough for the
+	// breaker's consecutive-failure count to trip the fail-open fallback.
+	ctx, cancel := context.WithTimeout(ctx, l.checkTimeout)
+	defer cancel()
 
 	reply, err := l.checker.Check(ctx, l.redis, l.checkKeys, redisclient.CheckParams{
 		APIKeyHash:   hash,
@@ -164,8 +185,11 @@ func (l *Limiter) fallback(hash string, cost int64) CheckOutcome {
 	return CheckOutcome{Allowed: allowed, Remaining: remaining, ResetAtMS: resetAt, NowMS: nowMS, Degraded: true}
 }
 
-// Health reports Redis reachability for /healthz (constraint 11).
+// Health reports Redis reachability for /healthz (constraint 11). Bounded by
+// the same deadline as Check so a hung client can't stall health checks.
 func (l *Limiter) Health(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, l.checkTimeout)
+	defer cancel()
 	return l.redis.Ping(ctx).Err()
 }
 

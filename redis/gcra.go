@@ -11,6 +11,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -27,6 +28,19 @@ type FailoverConfig struct {
 	Password      string
 }
 
+// clientTimeouts bound every network operation below go-redis's 5s defaults.
+// They are well above the happy-path latency budget (<5ms server-side) and
+// exist so an outage fails fast: empirically, this go-redis version does not
+// abort an in-progress read when its context is cancelled — the read blocks
+// for the full ReadTimeout — so ReadTimeout is the lever that turns a hung
+// connection into a bounded failure. 300ms is ~60x the healthy read.
+const (
+	dialTimeout  = 300 * time.Millisecond
+	readTimeout  = 300 * time.Millisecond
+	writeTimeout = 300 * time.Millisecond
+	poolTimeout  = 300 * time.Millisecond
+)
+
 // NewFailoverClient builds a Sentinel-aware client pointing at whatever node
 // currently holds the master.
 func NewFailoverClient(cfg FailoverConfig) *redis.Client {
@@ -34,6 +48,10 @@ func NewFailoverClient(cfg FailoverConfig) *redis.Client {
 		MasterName:    cfg.MasterName,
 		SentinelAddrs: cfg.SentinelAddrs,
 		Password:      cfg.Password,
+		DialTimeout:   dialTimeout,
+		ReadTimeout:   readTimeout,
+		WriteTimeout:  writeTimeout,
+		PoolTimeout:   poolTimeout,
 	})
 }
 
@@ -61,9 +79,13 @@ func NewClient(cfg ClientConfig) (*redis.Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse REDIS_URL: %w", err)
 		}
+		opt.DialTimeout = dialTimeout
+		opt.ReadTimeout = readTimeout
+		opt.WriteTimeout = writeTimeout
+		opt.PoolTimeout = poolTimeout
 		return redis.NewClient(opt), nil
 	}
-	return redis.NewFailoverClient(&redis.FailoverOptions{
+	return NewFailoverClient(FailoverConfig{
 		MasterName:    cfg.MasterName,
 		SentinelAddrs: cfg.SentinelAddrs,
 		Password:      cfg.Password,
