@@ -23,6 +23,7 @@ type RedisConfig struct {
 	MasterName    string
 	SentinelAddrs []string
 	Password      string
+	URL           string
 }
 
 func LoadConfig() Config {
@@ -33,6 +34,7 @@ func LoadConfig() Config {
 			MasterName:    envOr("REDIS_MASTER_NAME", "mymaster"),
 			SentinelAddrs: splitCSV(envOr("REDIS_SENTINEL_ADDRS", "127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381")),
 			Password:      os.Getenv("REDIS_PASSWORD"),
+			URL:           os.Getenv("REDIS_URL"),
 		},
 		Port:            envInt("PORT", 8081),
 		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),

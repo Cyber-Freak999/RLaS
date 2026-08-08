@@ -17,16 +17,22 @@ import (
 	"rlas/redis"
 )
 
-// replicaID is the container/process hostname, resolved once at startup. Each
-// replica in the scaled compose service has a unique container hostname, which
-// is what lets an observer correlate /v1/check responses with the replica that
-// served them (X-Replica header).
-var replicaID = func() string {
+// replicaID identifies the serving process for the X-Replica header, resolved
+// once at startup. Render assigns each instance a unique RENDER_INSTANCE_ID;
+// when present it is preferred over the container hostname so a scaled service
+// on a managed platform still exposes per-replica identity through its load
+// balancer (compose replicas use their unique container hostnames).
+var replicaID = resolveReplicaID()
+
+func resolveReplicaID() string {
+	if id := os.Getenv("RENDER_INSTANCE_ID"); id != "" {
+		return id
+	}
 	if h, err := os.Hostname(); err == nil {
 		return h
 	}
 	return "unknown"
-}()
+}
 
 // Limiter is the /v1/check engine. Auth, limit lookup, the GCRA bucket, and
 // the Streams XADD all happen inside check.lua, so one /v1/check is exactly

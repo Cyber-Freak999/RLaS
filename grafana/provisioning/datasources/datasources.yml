@@ -1,7 +1,8 @@
 # Provisioned data sources. UIDs are pinned so dashboards reference stable
-# ids. TimescaleDB credentials default to the same POSTGRES_* defaults the
-# compose control-plane DSN uses; if POSTGRES_* is overridden in .env, these
-# must be updated to match (Grafana provisioning files are not interpolated).
+# ids. Endpoints and credentials come from the container environment (Grafana
+# interpolates ${VAR} in provisioning files): compose supplies the in-network
+# defaults in docker-compose.yml, and a managed deployment (Render) overrides
+# them with its own hosts and credentials.
 apiVersion: 1
 
 datasources:
@@ -9,20 +10,22 @@ datasources:
     uid: rlas-prometheus-ds
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    url: ${PROMETHEUS_URL}
     isDefault: true
     editable: false
 
   - name: TimescaleDB
     uid: rlas-timescale-ds
-    type: postgresql
+    # Grafana 13 datasource type == plugin id (postgres was split out of core;
+    # the legacy `postgresql` type no longer resolves to the plugin).
+    type: grafana-postgresql-datasource
     access: proxy
-    url: timescaledb:5432
-    user: timescale
+    url: ${TIMESCALE_DB_HOST}:5432
+    user: ${TIMESCALE_DB_USER}
     secureJsonData:
-      password: timescale
+      password: ${TIMESCALE_DB_PASSWORD}
     jsonData:
-      database: rlas
-      sslmode: disable
+      database: ${TIMESCALE_DB_NAME}
+      sslmode: ${TIMESCALE_DB_SSLMODE}
       postgresVersion: 1600
     editable: false
