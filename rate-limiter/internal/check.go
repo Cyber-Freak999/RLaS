@@ -129,6 +129,14 @@ func (l *Limiter) Check(ctx context.Context, apiKey string, cost int64) CheckOut
 	}
 
 	if reply.Status == redisclient.StatusAllowed {
+		// The script's analytics push is non-fatal by design (architecture
+		// doc: logging never slows or breaks /check). When it failed, the
+		// request is still approved and the token still consumed — the only
+		// consequence is a missing event for the Streams consumer, which we
+		// surface as a structured log line so it can be alerted on.
+		if !reply.StreamOK {
+			l.logger.Error("stream_xadd_failed", "client_id", reply.ClientID, "cost", cost)
+		}
 		return CheckOutcome{Allowed: true, Remaining: reply.Remaining, ResetAtMS: reply.ResetAtMS, NowMS: reply.NowMS}
 	}
 	return CheckOutcome{Allowed: false, Remaining: 0, ResetAtMS: reply.ResetAtMS, NowMS: reply.NowMS}

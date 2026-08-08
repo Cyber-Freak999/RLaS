@@ -18,13 +18,17 @@
 -- ARGV[2]  cost                      tokens consumed (>= 1, constraint 7)
 -- ARGV[3]  stream MAXLEN             XADD trimming target (constraint 10)
 --
--- Returns {status, remaining, reset_at_ms, now_ms, client_id, rate, period, burst}:
---   status  1 = allowed   (bucket consumed, stream event pushed)
+-- Returns {status, remaining, reset_at_ms, now_ms, client_id, rate, period, burst, stream_ok}:
+--   status  1 = allowed   (bucket consumed, stream event push attempted)
 --           0 = denied    (bucket intact, no stream event)
 --          -1 = unauthorized        (key not in api_keys)
 --          -2 = limits not found    (client_limits:{id} missing)
 --          -3 = limits invalid      (unparseable or out-of-range config)
 --          -4 = bad parameters      (cost < 1; the HTTP boundary rejects this)
+--   stream_ok 1 = push succeeded or not attempted; 0 = allowed but the XADD
+--                failed (the limiter logs stream_xadd_failed, nothing else).
+--                Only meaningful when status == 1; all other paths return 1
+--                because no push was expected.
 --
 -- The client_limits / api_keys keys are still the only copy of who's allowed
 -- to call (constraint 9) and the gcra state key keeps the exact
@@ -46,7 +50,7 @@ end
 -- Defensive only: constraint 13 rejects cost < 1 at the HTTP boundary. The
 -- guard keeps the script total no matter the caller.
 if cost < 1 then
-  return { -4, 0, 0, 0, '', 0, '', 0 }
+  return { -4, 0, 0, 0, '', 0, '', 0, 1 }
 end
 
 local t = redis.call('TIME')
@@ -54,17 +58,17 @@ local now = (t[1] * 1000) + math.floor(t[2] / 1000)
 
 local client_id = redis.call('HGET', apiKeys, keyHash)
 if not client_id then
-  return { -1, 0, 0, now, '', 0, '', 0 }
+  return { -1, 0, 0, now, '', 0, '', 0, 1 }
 end
 
 local raw = redis.call('GET', limPref .. client_id)
 if not raw then
-  return { -2, 0, 0, now, client_id, 0, '', 0 }
+  return { -2, 0, 0, now, client_id, 0, '', 0, 1 }
 end
 
 local ok, limits = pcall(cjson.decode, raw)
 if not ok or type(limits) ~= 'table' then
-  return { -3, 0, 0, now, client_id, 0, '', 0 }
+  return { -3, 0, 0, now, client_id, 0, '', 0, 1 }
 end
 
 -- Stored values are int64 JSON from the control-plane (constraint 13), but a
@@ -74,13 +78,13 @@ local burst  = tonumber(limits.burst)
 local rate   = tonumber(limits.rate)
 local period = limits.period
 if burst == nil or rate == nil or type(period) ~= 'string' then
-  return { -3, 0, 0, now, client_id, 0, '', 0 }
+  return { -3, 0, 0, now, client_id, 0, '', 0, 1 }
 end
 
 -- Mirror Limits.Valid() (constraint 13): rate > 0, burst >= 1, period enum.
 if rate <= 0 or burst < 1 or
    (period ~= 'second' and period ~= 'minute' and period ~= 'hour') then
-  return { -3, 0, 0, now, client_id, 0, '', 0 }
+  return { -3, 0, 0, now, client_id, 0, '', 0, 1 }
 end
 
 local periodSec = 1
@@ -111,7 +115,7 @@ if available < cost then
   if reset_at < now then
     reset_at = now
   end
-  return { 0, math.floor(remaining), math.floor(reset_at), now, client_id, rate, period, burst }
+  return { 0, math.floor(remaining), math.floor(reset_at), now, client_id, rate, period, burst, 1 }
 end
 
 local new_tat = tat + (cost * interval)
@@ -126,7 +130,18 @@ end
 -- consumption (constraint 5). The old separate XADD left a crash window
 -- between the EVAL and the XADD where a consumed token produced no analytics
 -- event; here they can never diverge.
-redis.call('XADD', stream, 'MAXLEN', '~', maxlen, '*',
+--
+-- The push is deliberately NON-FATAL: it is pcall-guarded so a telemetry
+-- failure can never turn an allowed request into a degraded /check or a
+-- deny. stream_ok=0 tells the limiter to log stream_xadd_failed. The catch is
+-- limited to runtime errors — script-aborting conditions (OOM, write to a
+-- read-only replica) still abort the whole EVAL, which is identical to the
+-- GCRA SET above, so the stream guard adds no new failure class.
+local pushed, _ = pcall(redis.call, 'XADD', stream, 'MAXLEN', '~', maxlen, '*',
   'client_id', client_id, 'cost', tostring(cost), 'ts', tostring(now))
+local stream_ok = 1
+if not pushed then
+  stream_ok = 0
+end
 
-return { 1, math.floor(remaining), math.floor(new_tat), now, client_id, rate, period, burst }
+return { 1, math.floor(remaining), math.floor(new_tat), now, client_id, rate, period, burst, stream_ok }
