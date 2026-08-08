@@ -112,7 +112,6 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 	c.warnIfLagging(ctx)
 	return nil
 }
-
 // ensureGroup creates the consumer group once. BUSYGROUP is expected on
 // restart and is not an error.
 func (c *Consumer) ensureGroup(ctx context.Context) error {
@@ -175,11 +174,17 @@ func (c *Consumer) processMessages(ctx context.Context, msgs []redis.XMessage) e
 }
 
 // warnIfLagging emits the constraint-10 signal that the consumer is falling
-// behind before the MAXLEN trim actually drops events.
+// behind before the MAXLEN trim actually drops events. It also publishes the
+// stream length / pending gauges on the same round trips so the ops dashboard
+// can graph lag continuously.
 func (c *Consumer) warnIfLagging(ctx context.Context) {
 	n, err := c.client.XLen(ctx, c.stream).Result()
 	if err != nil {
 		return
+	}
+	streamEntries.Set(float64(n))
+	if p, err := c.client.XPending(ctx, c.stream, c.group).Result(); err == nil {
+		streamPending.Set(float64(p.Count))
 	}
 	if n > c.lagWarn {
 		c.logger.Warn("consumer_stream_lag", "stream_len", n, "threshold", c.lagWarn)

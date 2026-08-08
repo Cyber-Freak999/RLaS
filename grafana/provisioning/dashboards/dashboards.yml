@@ -1,0 +1,15 @@
+# Dashboard provider: serves the committed dashboard JSON from the mounted
+# directory. disableDeletion keeps a mis-click in the UI from removing a
+# provisioned dashboard; the file stays the source of truth.
+apiVersion: 1
+
+providers:
+  - name: RLaS
+    orgId: 1
+    folder: RLaS
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

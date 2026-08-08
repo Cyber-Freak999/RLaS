@@ -243,6 +243,60 @@ services:
     networks:
       - backend
 
+  prometheus:
+    image: prom/prometheus:latest
+    entrypoint: ["/bin/sh", "/etc/prometheus/entrypoint.sh"]
+    environment:
+      # Interpolated into prometheus.yml by entrypoint.sh (the config loader
+      # itself does not expand env vars); compose supplies the default so an
+      # unset .env value still yields a valid duration.
+      PROMETHEUS_SCRAPE_INTERVAL: ${PROMETHEUS_SCRAPE_INTERVAL:-10s}
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      rate-limiter:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      # First boot runs the full Grafana DB migration (~5 min on a fresh
+      # volume), so the window covers it — the server only binds afterwards.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 90
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - backend
+
 networks:
   backend:
     ipam:
@@ -256,3 +310,5 @@ volumes:
   redis-sentinel-2-data:
   redis-sentinel-3-data:
   timescale-data:
+  prometheus-data:
+  grafana-data:

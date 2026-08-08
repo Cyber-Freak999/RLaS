@@ -49,6 +49,27 @@ start.
 Default admin bearer token and Grafana credentials are set via `.env` — see
 `.env.example`.
 
+### Observability (M5)
+
+Grafana (http://localhost:3000, login `admin` / `GRAFANA_ADMIN_PASSWORD` from
+`.env`) ships two provisioned dashboards:
+
+- **RLaS — Ops** (Prometheus datasource): per-replica check latency (p95/p99),
+  checks-per-second by outcome, circuit-breaker state, degraded (fail-open)
+  responses, and Streams-consumer lag. The consumer-lag gauges
+  (`rlas_stream_entries` = XLEN, `rlas_stream_pending` = XPENDING) give the
+  constraint-10 "falling behind" warning an alertable metric counterpart.
+- **RLaS — Business** (TimescaleDB datasource): per-client approved-request
+  usage, a requests-per-day trend over 10/15/30-day windows (use the dashboard
+  time picker), and average server-side response time, with a multi-select
+  `client_id` filter.
+
+Prometheus scrapes all 3 rate-limiter replicas (discovered individually via
+Docker's embedded DNS) plus control-plane. The scrape interval comes from
+`PROMETHEUS_SCRAPE_INTERVAL` in `.env` and is interpolated into
+`prometheus/prometheus.yml` by `prometheus/entrypoint.sh` (Prometheus does not
+expand env vars in config files itself).
+
 Each service exposes `GET /healthz`, checking its actual dependencies (Redis,
 and for control-plane, TimescaleDB too) rather than just process liveness —
 this is what Compose's health-check-gated startup ordering relies on. Both
@@ -160,7 +181,11 @@ reads each replica's `/metrics` and fails unless all 3 replicas served traffic.
    Measured on this host after the single-trip change: 836 req/sec, p95 183ms.
    The gate must be run on a dedicated benchmark box with the core count the
    architecture doc's capacity math assumes; a failing run here does not indicate
-   a regression in `/check`.
+   a regression in `/check`. The same hardware bound applies to the server-side
+   tier: the ops dashboard (Prometheus histogram `rlas_check_duration_seconds`)
+   shows p99 ≈ 250ms on this host under load, against the < 5ms target — the
+   EVAL itself is sub-millisecond when cores aren't contended, which is where
+   the benchmark box comes in.
 
 3. **`chaos` scenario (M6)** — starts load, then automatically stops the
    `redis-master` container mid-run, asserts requests continue succeeding via the
