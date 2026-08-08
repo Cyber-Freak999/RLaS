@@ -393,3 +393,51 @@ func TestHealthzUnhealthyWhenRedisDown(t *testing.T) {
 		t.Fatalf("healthz with redis down: status %d, want 503 (body %s)", resp.StatusCode, body)
 	}
 }
+
+func TestCheckAllowsAndLogsDroppedStreamEvent(t *testing.T) {
+	c := testRedis(t)
+	apiKey := fmt.Sprintf("key-%s", t.Name())
+	clientID := fmt.Sprintf("client-%s", t.Name())
+	lim := NewLimiter(LimiterOptions{Redis: c, Logger: testLogger()})
+
+	// Point the limiter at test-scoped keys so the live stream and client
+	// schema stay untouched, then replace the stream key with a non-stream so
+	// the script's XADD fails. The request must still be allowed (the push is
+	// non-fatal) and the dropped event must show up as a structured log line.
+	pref := strings.ReplaceAll(t.Name(), "/", "_") + ":"
+	lim.checkKeys = redisclient.CheckKeys{
+		APIKeys:      "tk:api:" + pref,
+		LimitsPrefix: "tk:lim:" + pref,
+		GcraPrefix:   "tk:gcra:" + pref,
+		Stream:       "tk:stream:" + pref,
+	}
+	ctx := context.Background()
+	hash := HashAPIKey(apiKey)
+	if err := c.HSet(ctx, lim.checkKeys.APIKeys, hash, clientID).Err(); err != nil {
+		t.Fatalf("seed api_keys: %v", err)
+	}
+	raw, err := json.Marshal(Limits{Rate: 5, Period: "second", Burst: 5})
+	if err != nil {
+		t.Fatalf("seed limits marshal: %v", err)
+	}
+	if err := c.Set(ctx, lim.checkKeys.LimitsPrefix+clientID, string(raw), 0).Err(); err != nil {
+		t.Fatalf("seed limits: %v", err)
+	}
+	if err := c.Set(ctx, lim.checkKeys.Stream, "not-a-stream", 0).Err(); err != nil {
+		t.Fatalf("seed broken stream: %v", err)
+	}
+
+	var buf bytes.Buffer
+	lim.logger = slog.New(slog.NewJSONHandler(&buf, nil))
+
+	srv := httptest.NewServer(Server(lim))
+	defer srv.Close()
+
+	resp, out := doCheck(t, srv.URL, apiKey, "")
+	if resp.StatusCode != http.StatusOK || out["allowed"] != true {
+		t.Fatalf("request with a broken stream must still be allowed: %d %v", resp.StatusCode, out)
+	}
+	if !strings.Contains(buf.String(), "stream_xadd_failed") {
+		t.Fatalf("missing stream_xadd_failed log event, got: %s", buf.String())
+	}
+}

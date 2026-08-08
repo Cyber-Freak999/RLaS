@@ -36,6 +36,9 @@ func TestCheckerAllowsAndDecodesReply(t *testing.T) {
 	if reply.NowMS <= 0 || reply.ResetAtMS < reply.NowMS || reply.ResetAtMS > reply.NowMS+500 {
 		t.Fatalf("reset_at %d not within [now=%d, now+500]", reply.ResetAtMS, reply.NowMS)
 	}
+	if !reply.StreamOK {
+		t.Fatalf("StreamOK = false, want true on a normal allow")
+	}
 }
 
 func TestCheckerDeniedThenAllowedStatuses(t *testing.T) {
@@ -106,5 +109,29 @@ func TestCheckerBadCostStatus(t *testing.T) {
 	}
 	if reply.Status != redisclient.StatusBadParams {
 		t.Fatalf("status = %v, want bad params", reply.Status)
+	}
+}
+
+func TestCheckerAllowWithFailedStream(t *testing.T) {
+	c := newTestClient(t)
+	ch := redisclient.NewChecker(c)
+	k := checkTestKeys(t)
+	seedCheckClient(t, k, "client-aa", `{"rate":5,"period":"second","burst":10}`)
+	// A non-stream value where the script expects a stream makes the XADD fail.
+	if err := c.Set(clientCtx, k.stream, "not-a-stream", 0).Err(); err != nil {
+		t.Fatalf("seed broken stream: %v", err)
+	}
+
+	reply, err := ch.Check(clientCtx, c, redisclient.CheckKeys{
+		APIKeys: k.apiKeys, LimitsPrefix: k.limPref, GcraPrefix: k.gcraPref, Stream: k.stream,
+	}, redisclient.CheckParams{APIKeyHash: "testhash", Cost: 1, StreamMaxLen: 100000})
+	if err != nil {
+		t.Fatalf("check with broken stream must not error: %v", err)
+	}
+	if reply.Status != redisclient.StatusAllowed {
+		t.Fatalf("status = %v, want allowed despite the failed push", reply.Status)
+	}
+	if reply.StreamOK {
+		t.Fatalf("StreamOK = true, want false when the push failed")
 	}
 }

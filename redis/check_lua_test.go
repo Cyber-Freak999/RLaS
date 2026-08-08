@@ -68,10 +68,11 @@ type checkResult struct {
 	rate      int64
 	period    string
 	burst     int64
+	streamOK  int64
 }
 
 // runCheck performs one EVAL with the given api-key hash, cost, and stream
-// MAXLEN, decoding the script's 8-element reply.
+// MAXLEN, decoding the script's 9-element reply.
 func runCheck(t *testing.T, script string, k checkKeys, hash string, cost, maxlen int64) checkResult {
 	t.Helper()
 	raw, err := client.Eval(ctx, script,
@@ -81,7 +82,7 @@ func runCheck(t *testing.T, script string, k checkKeys, hash string, cost, maxle
 		t.Fatalf("eval: %v", err)
 	}
 	items, ok := raw.([]interface{})
-	if !ok || len(items) != 8 {
+	if !ok || len(items) != 9 {
 		t.Fatalf("unexpected script reply: %#v", raw)
 	}
 	return checkResult{
@@ -93,6 +94,7 @@ func runCheck(t *testing.T, script string, k checkKeys, hash string, cost, maxle
 		rate:      items[5].(int64),
 		period:    items[6].(string),
 		burst:     items[7].(int64),
+		streamOK:  items[8].(int64),
 	}
 }
 
@@ -274,5 +276,46 @@ func TestCheckRejectsZeroCost(t *testing.T) {
 	}
 	if n := streamLen(t, k); n != 0 {
 		t.Fatalf("bad-params request must not push a stream event, got %d", n)
+	}
+}
+
+func TestCheckStreamOKTrueOnNormalAllow(t *testing.T) {
+	script := loadCheckScript(t)
+	k := checkTestKeys(t)
+	seedCheckClient(t, k, "client-i", `{"rate":5,"period":"second","burst":10}`)
+
+	r := runCheck(t, script, k, "testhash", 1, 100000)
+	if r.status != 1 {
+		t.Fatalf("known client should be allowed, status=%d", r.status)
+	}
+	if r.streamOK != 1 {
+		t.Fatalf("stream_ok = %d, want 1 when the push succeeds", r.streamOK)
+	}
+}
+
+func TestCheckAllowsWhenStreamWriteFails(t *testing.T) {
+	script := loadCheckScript(t)
+	k := checkTestKeys(t)
+	seedCheckClient(t, k, "client-j", `{"rate":1,"period":"second","burst":1}`)
+	// Break the stream: a plain string where the script expects a stream, so
+	// the XADD errors. The request must still be allowed and the token still
+	// consumed — the analytics push is non-fatal and must never turn /check
+	// into a 500 or a deny (architecture doc: logging never slows the hot path).
+	if err := client.Set(ctx, k.stream, "not-a-stream", 0).Err(); err != nil {
+		t.Fatalf("seed broken stream: %v", err)
+	}
+
+	r := runCheck(t, script, k, "testhash", 1, 100000)
+	if r.status != 1 {
+		t.Fatalf("request must still be allowed when the stream write fails, status=%d", r.status)
+	}
+	if r.streamOK != 0 {
+		t.Fatalf("stream_ok = %d, want 0 when the push failed", r.streamOK)
+	}
+	if r.remaining != 0 {
+		t.Fatalf("the token must still be consumed, remaining=%d", r.remaining)
+	}
+	if r2 := runCheck(t, script, k, "testhash", 1, 100000); r2.status != 0 {
+		t.Fatalf("second request should be denied (token was consumed), status=%d", r2.status)
 	}
 }
