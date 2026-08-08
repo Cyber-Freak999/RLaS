@@ -29,9 +29,10 @@ func main() {
 	defer client.Close()
 
 	limiter := internal.NewLimiter(internal.LimiterOptions{
-		Redis:   client,
-		Checker: redisclient.NewChecker(client),
-		Logger:  logger,
+		Redis:        client,
+		Checker:      redisclient.NewChecker(client),
+		Logger:       logger,
+		CheckTimeout: cfg.CheckTimeout,
 	})
 
 	srv := &http.Server{

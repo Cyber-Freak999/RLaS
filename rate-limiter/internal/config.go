@@ -14,6 +14,7 @@ type Config struct {
 	Redis           redisclient.ClientConfig
 	Port            int
 	ShutdownTimeout time.Duration
+	CheckTimeout    time.Duration
 }
 
 // LoadConfig reads env vars. Defaults match local developer setup; Compose
@@ -29,6 +30,7 @@ func LoadConfig() Config {
 		},
 		Port:            envInt("PORT", 8080),
 		ShutdownTimeout: envDur("SHUTDOWN_TIMEOUT", 10*time.Second),
+		CheckTimeout:    envDur("CHECK_REDIS_TIMEOUT", 500*time.Millisecond),
 	}
 }
 
