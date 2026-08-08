@@ -272,10 +272,24 @@ services:
       - backend
 
   grafana:
-    image: grafana/grafana:latest
+    # Built from grafana/Dockerfile: recent official images ship the
+    # PostgreSQL datasource as an unbuilt source tree with no backend binary
+    # ("Plugin not registered" on every query), so the released plugin is
+    # baked in at image build time. See grafana/Dockerfile for the why.
+    build: ./grafana
+    image: rlas-grafana:local
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
+      # Datasource endpoints/creds for the env-templated datasources.yml.
+      # compose values are the in-network defaults; managed deployments
+      # override the same vars (see deploy/render.yaml).
+      PROMETHEUS_URL: http://prometheus:9090
+      TIMESCALE_DB_HOST: timescaledb
+      TIMESCALE_DB_USER: ${POSTGRES_USER:-timescale}
+      TIMESCALE_DB_PASSWORD: ${POSTGRES_PASSWORD:-timescale}
+      TIMESCALE_DB_NAME: ${POSTGRES_DB:-rlas}
+      TIMESCALE_DB_SSLMODE: disable
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

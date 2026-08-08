@@ -22,6 +22,18 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("default shutdown timeout = %s, want 10s", cfg.ShutdownTimeout)
 	}
+	if cfg.Redis.URL != "" {
+		t.Fatalf("default redis url = %q, want empty", cfg.Redis.URL)
+	}
+}
+
+func TestLoadConfigReadsRedisURL(t *testing.T) {
+	t.Setenv("REDIS_URL", "redis://cache.internal:6379/0")
+	t.Setenv("REDIS_SENTINEL_ADDRS", "")
+	cfg := LoadConfig()
+	if cfg.Redis.URL != "redis://cache.internal:6379/0" {
+		t.Fatalf("redis url = %q, want redis://cache.internal:6379/0", cfg.Redis.URL)
+	}
 }
 
 func TestLoadConfigOverrides(t *testing.T) {

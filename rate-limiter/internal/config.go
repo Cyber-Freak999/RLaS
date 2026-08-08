@@ -11,19 +11,21 @@ import (
 
 // Config carries everything the rate-limiter reads from the environment.
 type Config struct {
-	Redis           redisclient.FailoverConfig
+	Redis           redisclient.ClientConfig
 	Port            int
 	ShutdownTimeout time.Duration
 }
 
 // LoadConfig reads env vars. Defaults match local developer setup; Compose
-// overrides them with in-container service names.
+// overrides them with in-container service names. REDIS_URL is the opt-in for
+// managed single-endpoint Redis (no Sentinel to query).
 func LoadConfig() Config {
 	return Config{
-		Redis: redisclient.FailoverConfig{
+		Redis: redisclient.ClientConfig{
 			MasterName:    envOr("REDIS_MASTER_NAME", "mymaster"),
 			SentinelAddrs: splitCSV(envOr("REDIS_SENTINEL_ADDRS", "127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381")),
 			Password:      os.Getenv("REDIS_PASSWORD"),
+			URL:           os.Getenv("REDIS_URL"),
 		},
 		Port:            envInt("PORT", 8080),
 		ShutdownTimeout: envDur("SHUTDOWN_TIMEOUT", 10*time.Second),

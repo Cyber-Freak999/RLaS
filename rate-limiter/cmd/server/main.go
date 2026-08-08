@@ -21,7 +21,11 @@ func main() {
 
 	cfg := internal.LoadConfig()
 
-	client := redisclient.NewFailoverClient(cfg.Redis)
+	client, err := redisclient.NewClient(cfg.Redis)
+	if err != nil {
+		logger.Error("redis_config_invalid", "error", err.Error())
+		os.Exit(1)
+	}
 	defer client.Close()
 
 	limiter := internal.NewLimiter(internal.LimiterOptions{

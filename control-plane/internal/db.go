@@ -12,6 +12,12 @@ import (
 // hypertable conversion must follow the table creation anyway.
 func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	stmts := []string{
+		// Managed Postgres (Render's TimescaleDB offering) ships the extension
+		// installed but not always enabled in the target database; the local
+		// compose image pre-enables it. IF NOT EXISTS makes this a no-op where
+		// it's already active and a safe enable everywhere else. It must run
+		// before create_hypertable, which lives in the extension.
+		`CREATE EXTENSION IF NOT EXISTS timescaledb`,
 		// The primary key must include ts, the partitioning column: TimescaleDB
 		// rejects any unique index that omits a partitioning column (SQLSTATE
 		// TS103). A redelivered stream entry carries the same event_id AND the

@@ -1,0 +1,19 @@
+# Render deployment variant of the scrape config. Render has no compose DNS:
+# targets are explicit HTTPS endpoints supplied via env vars and interpolated
+# by entrypoint.sh (which also swaps in the scrape interval). The platform LB
+# fronts the 3 rate-limiter replicas, so a single target covers the fleet —
+# per-replica discovery lives in prometheus.yml for the compose stack.
+global:
+  scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL}
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: rate-limiter
+    scheme: https
+    static_configs:
+      - targets: ['__RATE_LIMITER_TARGETS__']
+
+  - job_name: control-plane
+    scheme: https
+    static_configs:
+      - targets: ['__CONTROL_PLANE_TARGET__']

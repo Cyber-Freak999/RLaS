@@ -39,11 +39,16 @@ func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	rdb := redisclient.NewFailoverClient(redisclient.FailoverConfig{
+	rdb, err := redisclient.NewClient(redisclient.ClientConfig{
 		MasterName:    cfg.Redis.MasterName,
 		SentinelAddrs: cfg.Redis.SentinelAddrs,
 		Password:      cfg.Redis.Password,
+		URL:           cfg.Redis.URL,
 	})
+	if err != nil {
+		logger.Error("redis_config_invalid", "error", err.Error())
+		os.Exit(1)
+	}
 	defer rdb.Close()
 
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
