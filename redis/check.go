@@ -46,9 +46,12 @@ type CheckParams struct {
 	StreamMaxLen int64 // XADD MAXLEN target (constraint 10)
 }
 
-// CheckReply is the decoded 8-element reply. ClientID/Rate/Period/Burst are
+// CheckReply is the decoded 9-element reply. ClientID/Rate/Period/Burst are
 // populated on statuses where the client was resolved; the rate-limiter uses
-// them to refresh its fail-open cache on the same round trip.
+// them to refresh its fail-open cache on the same round trip. StreamOK is only
+// meaningful on StatusAllowed: false means the request was allowed but the
+// analytics push failed (the limiter logs stream_xadd_failed and nothing
+// else — never a deny or a 500).
 type CheckReply struct {
 	Status    CheckStatus
 	Remaining int64
@@ -58,6 +61,7 @@ type CheckReply struct {
 	Rate      int64
 	Period    string
 	Burst     int64
+	StreamOK  bool
 }
 
 // Checker runs check.lua. Like GCRA, one instance per service is fine — the
@@ -81,7 +85,7 @@ func (ch *Checker) Check(ctx context.Context, c redis.Cmdable, keys CheckKeys, p
 		return CheckReply{}, err
 	}
 	items, ok := raw.([]interface{})
-	if !ok || len(items) != 8 {
+	if !ok || len(items) != 9 {
 		return CheckReply{}, fmt.Errorf("unexpected check script reply %#v", raw)
 	}
 	return CheckReply{
@@ -93,5 +97,6 @@ func (ch *Checker) Check(ctx context.Context, c redis.Cmdable, keys CheckKeys, p
 		Rate:      items[5].(int64),
 		Period:    items[6].(string),
 		Burst:     items[7].(int64),
+		StreamOK:  items[8].(int64) == 1,
 	}, nil
 }
