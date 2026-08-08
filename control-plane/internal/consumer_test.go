@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -197,6 +198,32 @@ func TestConsumerWarnsOnStreamLag(t *testing.T) {
 		}
 	}
 	t.Fatalf("lag warning not logged; records=%v", *records)
+}
+
+func TestConsumerPublishesLagMetrics(t *testing.T) {
+	c := testRedis(t)
+	logger, _ := captureLogger()
+	cons, _, stream, _ := newTestConsumer(t, c, logger)
+	ctx := context.Background()
+
+	// Clear any value left by an earlier test in this binary, then load the
+	// stream with 3 entries. After a fully-drained cycle the entries are still
+	// in the stream (XACK does not trim) and the group has 0 pending, so the
+	// gauges must read XLEN=3 / XPENDING=0.
+	streamEntries.Set(0)
+	streamPending.Set(0)
+	for i := int64(1); i <= 3; i++ {
+		xadd(t, c, stream, "client-F", 1, 5000+i)
+	}
+	if err := cons.runOnce(ctx); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if got := testutil.ToFloat64(streamEntries); got != 3 {
+		t.Fatalf("rlas_stream_entries = %v, want 3", got)
+	}
+	if got := testutil.ToFloat64(streamPending); got != 0 {
+		t.Fatalf("rlas_stream_pending = %v, want 0", got)
+	}
 }
 
 func TestConsumerDoesNotCrashWhenRedisDown(t *testing.T) {
