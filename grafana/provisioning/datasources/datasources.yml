@@ -1,0 +1,28 @@
+# Provisioned data sources. UIDs are pinned so dashboards reference stable
+# ids. TimescaleDB credentials default to the same POSTGRES_* defaults the
+# compose control-plane DSN uses; if POSTGRES_* is overridden in .env, these
+# must be updated to match (Grafana provisioning files are not interpolated).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: rlas-prometheus-ds
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: TimescaleDB
+    uid: rlas-timescale-ds
+    type: postgresql
+    access: proxy
+    url: timescaledb:5432
+    user: timescale
+    secureJsonData:
+      password: timescale
+    jsonData:
+      database: rlas
+      sslmode: disable
+      postgresVersion: 1600
+    editable: false

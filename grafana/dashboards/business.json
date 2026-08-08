@@ -1,0 +1,122 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Approved requests per client",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 0 },
+      "datasource": { "type": "postgresql", "uid": "rlas-timescale-ds" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT time_bucket('1 day', ts) AS \"time\", client_id AS metric, sum(cost)::float AS \"requests\" FROM approved_requests WHERE $__timeFilter(ts) AND ($client_id = '' OR client_id IN ($client_id)) GROUP BY 1, 2 ORDER BY 1",
+          "format": "time_series",
+          "datasource": { "type": "postgresql", "uid": "rlas-timescale-ds" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10, "showPoints": "never", "spanNulls": true },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total approved requests (selected window)",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "postgresql", "uid": "rlas-timescale-ds" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT coalesce(sum(cost), 0)::float AS \"requests\" FROM approved_requests WHERE $__timeFilter(ts) AND ($client_id = '' OR client_id IN ($client_id))",
+          "format": "table",
+          "datasource": { "type": "postgresql", "uid": "rlas-timescale-ds" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Average response time (server-side)",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "rlas-prometheus-ds" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(rlas_check_duration_seconds_sum[$__rate_interval])) / sum(rate(rlas_check_duration_seconds_count[$__rate_interval])) * 1000",
+          "legendFormat": "avg ms",
+          "datasource": { "type": "prometheus", "uid": "rlas-prometheus-ds" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "unit": "ms", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Requests per day (10/15/30-day windows via time picker)",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 10 },
+      "datasource": { "type": "postgresql", "uid": "rlas-timescale-ds" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT time_bucket('1 day', ts) AS \"time\", sum(cost)::float AS \"requests\" FROM approved_requests WHERE $__timeFilter(ts) AND ($client_id = '' OR client_id IN ($client_id)) GROUP BY 1 ORDER BY 1",
+          "format": "time_series",
+          "datasource": { "type": "postgresql", "uid": "rlas-timescale-ds" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 40, "showPoints": "never", "spanNulls": true },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["rlas", "business"],
+  "templating": {
+    "list": [
+      {
+        "name": "client_id",
+        "type": "query",
+        "datasource": { "type": "postgresql", "uid": "rlas-timescale-ds" },
+        "definition": "SELECT DISTINCT client_id FROM approved_requests ORDER BY 1",
+        "query": "SELECT DISTINCT client_id FROM approved_requests ORDER BY 1",
+        "includeAll": true,
+        "allValue": "",
+        "multi": true,
+        "refresh": 1,
+        "sort": 1
+      }
+    ]
+  },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": { "refresh_intervals": ["10s", "30s", "1m", "5m"], "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "10d", "15d", "30d"] },
+  "timezone": "",
+  "title": "RLaS — Business",
+  "uid": "rlas-business",
+  "version": 1
+}

@@ -1,0 +1,24 @@
+# Prometheus scrape config. Both services already expose /metrics (the
+# rate-limiter's server-side latency histogram, checks counter, and breaker
+# gauge; the control-plane's consumer-lag gauges + Go runtime), so this file
+# only wires targets — no new metric plumbing lives here.
+#
+# The 3 rate-limiter replicas are discovered via Docker's embedded DNS: the
+# compose service name resolves to one A record per replica container, and
+# Prometheus dns_sd (type A) turns those into one scrape target each, so the
+# ops dashboard can show per-replica latency. scrape_interval comes from the
+# container env (compose defaults PROMETHEUS_SCRAPE_INTERVAL in .env).
+global:
+  scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL}
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: rate-limiter
+    dns_sd_configs:
+      - names: ['rate-limiter']
+        type: 'A'
+        port: 8080
+
+  - job_name: control-plane
+    static_configs:
+      - targets: ['control-plane:8081']
