@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# demo-seed runtime state (holds the demo client's API key)
+.demo-seed
+
 # Editor/IDE
 # .idea/
 # .vscode/
