@@ -283,7 +283,8 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       # Datasource endpoints/creds for the env-templated datasources.yml.
       # compose values are the in-network defaults; managed deployments
-      # override the same vars (see deploy/render.yaml).
+      # override the same vars (a Render blueprint is a future phase — the
+      # env-var portability for it ships in this branch already).
       PROMETHEUS_URL: http://prometheus:9090
       TIMESCALE_DB_HOST: timescaledb
       TIMESCALE_DB_USER: ${POSTGRES_USER:-timescale}
