@@ -30,7 +30,7 @@ func LoadConfig() Config {
 		},
 		Port:            envInt("PORT", 8080),
 		ShutdownTimeout: envDur("SHUTDOWN_TIMEOUT", 10*time.Second),
-		CheckTimeout:    envDur("CHECK_REDIS_TIMEOUT", 500*time.Millisecond),
+		CheckTimeout:    envDur("CHECK_REDIS_TIMEOUT", 3*time.Second),
 	}
 }
 
