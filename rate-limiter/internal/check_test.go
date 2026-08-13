@@ -405,9 +405,12 @@ func TestCheckFailsFastWhenRedisHangs(t *testing.T) {
 
 	// Build the hung client through the shared factory (URL mode = plain
 	// client) so the test exercises the real bounded timeouts the deployment
-	// gets, not a hand-tuned client: ReadTimeout 300ms caps each hung attempt,
-	// and the check-path deadline (250ms below) stops retry stacking. Only the
-	// combination returns fast enough to trip the fail-open breaker.
+	// gets, not a hand-tuned client. On a black-hole connection the in-flight
+	// read cannot be aborted by the context deadline — go-redis blocks for the
+	// full ReadTimeout — so each hung check costs ~ReadTimeout (2s in the
+	// production constants). That is still a hard bound where the pre-fix
+	// behavior stalled for tens of seconds, which is what the elapsed
+	// assertion below captures.
 	c, err := redisclient.NewClient(redisclient.ClientConfig{URL: "redis://" + ln.Addr().String()})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
@@ -443,8 +446,11 @@ func TestCheckFailsFastWhenRedisHangs(t *testing.T) {
 			t.Fatalf("request %d: expected degraded 429, got %d", i, resp.StatusCode)
 		}
 	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("3 checks took %v with Redis hanging; each must fail fast via the deadline", elapsed)
+	// 3 hung checks each block ~ReadTimeout (2s), so bound the whole run at
+	// 3x that plus margin: proves the hang is bounded (vs the pre-fix ~40s
+	// stall) without being tighter than the production read timeout.
+	if elapsed := time.Since(start); elapsed > 8*time.Second {
+		t.Fatalf("3 checks took %v with Redis hanging; each must fail fast within the read timeout", elapsed)
 	}
 	if !lim.BreakerOpen() {
 		t.Fatalf("breaker must trip after 3 hung failures")

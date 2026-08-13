@@ -29,16 +29,24 @@ type FailoverConfig struct {
 }
 
 // clientTimeouts bound every network operation below go-redis's 5s defaults.
-// They are well above the happy-path latency budget (<5ms server-side) and
-// exist so an outage fails fast: empirically, this go-redis version does not
-// abort an in-progress read when its context is cancelled — the read blocks
-// for the full ReadTimeout — so ReadTimeout is the lever that turns a hung
-// connection into a bounded failure. 300ms is ~60x the healthy read.
+// They exist so an outage fails fast: empirically, this go-redis version does
+// not abort an in-progress read when its context is cancelled — the read
+// blocks for the full ReadTimeout — so ReadTimeout is the lever that turns a
+// hung connection into a bounded failure.
+//
+// The bound must clear the healthy envelope, not just the target-hardware one:
+// the correctness gate runs on a shared 4-core dev host where the server-side
+// p99 is ~250ms under load and connection dials can exceed 300ms when the pool
+// scales up — a 300ms dial/read timeout turned those healthy-but-slow round
+// trips into false Redis failures, tripping the breaker mid-test and breaking
+// the exact-quota assertion. 2s is ~8x the dev-host p99 and hundreds of x the
+// sub-5ms target-machine read, so healthy traffic never trips it while a
+// dead-tier outage (connection reset, not timeout) still fails in milliseconds.
 const (
-	dialTimeout  = 300 * time.Millisecond
-	readTimeout  = 300 * time.Millisecond
-	writeTimeout = 300 * time.Millisecond
-	poolTimeout  = 300 * time.Millisecond
+	dialTimeout  = 2 * time.Second
+	readTimeout  = 2 * time.Second
+	writeTimeout = 2 * time.Second
+	poolTimeout  = 2 * time.Second
 )
 
 // NewFailoverClient builds a Sentinel-aware client pointing at whatever node

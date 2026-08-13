@@ -61,7 +61,7 @@ type LimiterOptions struct {
 	CheckTimeout time.Duration
 }
 
-const defaultCheckTimeout = 500 * time.Millisecond
+const defaultCheckTimeout = 3 * time.Second
 
 func NewLimiter(opts LimiterOptions) *Limiter {
 	if opts.Logger == nil {
