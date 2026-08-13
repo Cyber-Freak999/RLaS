@@ -124,19 +124,32 @@ watching it rotate across 3 distinct values is the quickest proof that nginx is
 balancing traffic round-robin across the whole fleet rather than pinning one
 replica:
 
----
-
-## 3. Running the tests
-
-Tests are intentionally **not** part of `docker compose up` — starting the system
-and testing it are kept as two separate, explicit steps.
-
 ```bash
 for i in 1 2 3 4 5 6; do
   curl -s -D - -o /dev/null -X POST http://localhost:8080/v1/check \
     -H "X-Api-Key: $CLIENT_API_KEY" -d '{"cost": 1}' | grep -i x-replica
 done
 ```
+
+### Populating the demo dashboard (F6)
+
+The provisioned Grafana dashboards render real usage data for any client that
+has live traffic, but a fresh stack starts with an empty TimescaleDB and
+nothing to show. `scripts/seed-demo.sh` fills the gap: it provisions a demo
+client (a real `api_keys` + `client_limits` entry in Redis), backfills 30 days
+of approved-request history directly into TimescaleDB, and fires 100 live
+`/check` requests through nginx so the full Streams → consumer → TimescaleDB
+path is exercised too.
+
+```bash
+./scripts/seed-demo.sh          # seed (idempotent; reuses the demo client)
+./scripts/seed-demo.sh --reset  # wipe the demo client and its rows, re-seed
+```
+
+The demo client's `api_key` is printed once and persisted in `.demo-seed`
+(gitignored) so re-runs reuse it; the 30-day history backfill is
+`ON CONFLICT (event_id, ts) DO NOTHING` and skips entirely when the window is
+already populated, so repeat runs add live traffic but never duplicate history.
 
 ---
 
@@ -255,9 +268,9 @@ docker compose run --rm rate-limiter go test -race ./...
 ├── grafana/                 # provisioned dashboards (business + ops)
 ├── prometheus/              # scrape config
 ├── k6/                      # load / correctness / chaos test scripts
-├── docs/
-│   ├── architecture-diagram.png
-│   └── Global-Rate-Limiter-Architecture-Documentation.docx
+├── scripts/                 # demo-data seed (seed-demo.sh)
+├── architecture-diagram.png
+├── Global-Rate-Limiter-Architecture-Documentation.docx
 ├── docker-compose.yml
 ├── docker-compose.test.yml
 ├── .env.example
